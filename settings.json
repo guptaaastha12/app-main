@@ -1,0 +1,6 @@
+{
+    "python.defaultInterpreterPath": "X:/Desktop/SPI/softpro_analytics/myenv/Scripts/python.exe",
+    "python.languageServer": "Pylance",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.completeFunctionParens": true
+}
