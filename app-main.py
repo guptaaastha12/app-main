@@ -64,10 +64,20 @@ from transformers import pipeline
 # -----------------------------
 # Streamlit Page Config
 # -----------------------------
+#st.set_page_config(page_title="College Sentiment & Feedback Insights", layout="wide")
+#st.title("College Sentiment & Feedback Insights")
+#st.caption("Audio + CRM logs → Transcripts → Sentiment → Insights → Recommendations")
 st.set_page_config(page_title="Softpro Sentiment & Sales Insights", layout="wide")
-st.title("College Sentiment & Feedback Insights")
-st.caption("Audio + CRM logs → Transcripts → Sentiment → Insights → Recommendations")
 
+# Header layout
+col_logo, col_title = st.columns([1, 6])
+
+with col_logo:
+    st.image("gnct logo.jpg", width=90)
+
+with col_title:
+    st.markdown("## College Sentiment & Feedback Insights")
+    st.caption("Audio + CRM logs → Transcripts → Sentiment → Insights → Recommendations")
 #new code adding---------1st
 st.markdown("## Select Feedback Input Mode")
 
@@ -76,7 +86,48 @@ input_mode = st.radio(
     ["Audio Feedback", "Text Feedback", "CRM Text Log", "Full CSV Analytics"],
     horizontal=True
 )
+# -----------------------------
+# 1) Upload Data (MODE-WISE)
+# -----------------------------
+audio_files = None
+csv_file = None
+crm_txt = None
+user_text = ""
 
+if input_mode == "Audio Feedback":
+    st.subheader("Upload Call Recordings")
+    audio_files = st.file_uploader(
+        "Upload call recordings (any audio file)",
+        accept_multiple_files=True
+    )
+
+elif input_mode == "Text Feedback":
+    st.subheader("Text Feedback Analysis")
+    user_text = st.text_area(
+        "Enter student/staff feedback",
+        height=180,
+        placeholder="Example: I faced issues during admission counselling..."
+    )
+# -----------------------------
+# Text Feedback Sentiment (ADD THIS)
+# -----------------------------
+
+elif input_mode == "CRM Text Log":
+    st.subheader("CRM / Admission Log Analysis")
+    crm_txt = st.file_uploader(
+        "Upload CRM log (.txt file)",
+        type=["txt"]
+    )
+    # -----------------------------
+
+
+elif input_mode == "Full CSV Analytics":
+    st.subheader("Upload CSV Logs")
+    csv_file = st.file_uploader(
+        "Upload CSV logs (student, year, course, remarks, etc.)",
+        type=["csv"]
+    )
+    
 # -----------------------------
 # Sidebar Controls
 # -----------------------------
@@ -115,6 +166,13 @@ def load_vosk(model_dir: str):
 def load_hf_pipeline():
     # Fast, widely used binary sentiment model
     return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
+@st.cache_resource(show_spinner=False)
+def load_zero_shot():
+    
+    return pipeline(
+        "zero-shot-classification",
+        model="facebook/bart-large-mnli"
+    )
 
 @st.cache_resource(show_spinner=False)
 def train_sklearn_sentiment(texts: pd.Series, labels: pd.Series):
@@ -202,39 +260,45 @@ def transcribe_with_vosk(audio_bytes: bytes, model, filename: str) -> str:
             os.remove(path)
         except Exception:
             pass
+        # CRM Text Log Sentiment
+# -----------------------------
+if input_mode == "CRM Text Log" and crm_txt is not None:
+    text_data = crm_txt.read().decode("utf-8")
 
+    st.subheader("CRM Log Preview")
+    st.text(text_data[:1000])
 
-# -----------------------------
-# File Uploaders
-# -----------------------------
-df = None
-merged = None
-st.subheader("1) Upload Data")
-col1, col2 = st.columns([1,1])
-with col1:
-    csv_file = st.file_uploader("Upload CSV logs (remarks, student, year, tech stack, location, date, optional label)", type=["csv"]) 
-with col2:
-    audio_files = st.file_uploader("Upload call recordings (any audio file)", accept_multiple_files=True)
+    nlp = load_hf_pipeline()
+    result = nlp(text_data[:4096])[0]
 
-# -----------------------------
-# Load DataFrame + Column Mapping
-# -----------------------------
+    sentiment = result["label"].lower()
+    score = result["score"]
 
-#adding second new code---------
-# -----------------------------
-# Text Feedback Mode (NEW – Feature 1)
-# -----------------------------
-if input_mode == "Text Feedback":
-    st.subheader("Text Feedback Analysis")
+    st.success(f"Sentiment: {sentiment.upper()}")
+    st.info(f"Confidence Score: {score:.2f}")
 
-    user_text = st.text_area(
-        "Enter student/staff feedback",
-        height=180,
-        placeholder="Example: I faced issues during admission counselling..."
+    # Chart
+    chart_df = pd.DataFrame({
+        "Sentiment": [sentiment.capitalize()],
+        "Score": [score]
+    })
+
+    fig = px.bar(
+        chart_df,
+        x="Sentiment",
+        y="Score",
+        range_y=[0, 1],
+        title="CRM Sentiment Confidence"
     )
 
+    st.plotly_chart(fig, use_container_width=True)
+    
+        # -----------------------------
+# TEXT FEEDBACK SENTIMENT (WORKING)
+# -----------------------------
+if input_mode == "Text Feedback":
     if user_text.strip():
-        st.write("### Sentiment Result")
+        st.subheader("Sentiment Result")
 
         nlp = load_hf_pipeline()
         result = nlp(user_text[:4096])[0]
@@ -244,132 +308,77 @@ if input_mode == "Text Feedback":
 
         st.success(f"Sentiment: {sentiment.upper()}")
         st.info(f"Confidence Score: {score:.2f}")
+    else:
+        st.info("Please enter some text to analyze sentiment.")
 
-        
-        
-        # -----------------------------
-# CRM Text Log Mode (NEW – Feature 1)
+
 # -----------------------------
-if input_mode == "CRM Text Log":
-    st.subheader("CRM / Admission Log Analysis")
+# File Uploaders
+# -----------------------------
+df = None
+merged = None
 
-    crm_txt = st.file_uploader(
-        "Upload CRM log (.txt)",
-        type=["txt"]
-    )
-
-    if crm_txt is not None:
-        text_data = crm_txt.read().decode("utf-8")
-
-        st.write("### Uploaded Log Preview")
-        st.text(text_data[:1000])
-
-        st.write("### Sentiment Result")
-
-        nlp = load_hf_pipeline()
-        result = nlp(text_data[:4096])[0]
-
-        sentiment = result["label"].lower()
-        score = result["score"]
-
-        st.success(f"Sentiment: {sentiment.upper()}")
-        st.info(f"Confidence Score: {score:.2f}")
-
-        
+# -----------------------------
+# Load DataFrame + Column Mapping
+# -----------------------------
 if input_mode == "Full CSV Analytics":
     if csv_file is not None:
         try:
-            df_raw = pd.read_csv(csv_file)
+            df = pd.read_csv(csv_file)
         except Exception:
-            df_raw = pd.read_csv(csv_file, encoding="latin-1")
+            df = pd.read_csv(csv_file, encoding="latin-1")
 
-        st.success(f"CSV loaded with shape {df_raw.shape}")
+        st.success(f"CSV loaded with shape {df.shape}")
 
-        with st.expander("Map columns (flexible)"):
-            cols = ["<none>"] + list(df_raw.columns)
-            map_student = st.selectbox("Student Name column", cols, index=cols.index("student_name") if "student_name" in df_raw.columns else 0)
-            map_year = st.selectbox("Year column", cols, index=cols.index("year") if "year" in df_raw.columns else 0)
-            map_stack = st.selectbox("Tech Stack column", cols, index=cols.index("tech_stack") if "tech_stack" in df_raw.columns else 0)
-            map_loc = st.selectbox("Location column", cols, index=cols.index("location") if "location" in df_raw.columns else 0)
-            map_remarks = st.selectbox("Remarks/Notes column", cols, index=cols.index("remarks") if "remarks" in df_raw.columns else 0)
-            map_callid = st.selectbox("Call ID column (optional)", cols, index=cols.index("call_id") if "call_id" in df_raw.columns else 0)
-            map_date = st.selectbox("Date column (optional)", cols, index=cols.index("date") if "date" in df_raw.columns else 0)
-            map_label = st.selectbox("Sentiment label column (optional: positive/neutral/negative)", cols, index=cols.index("label") if "label" in df_raw.columns else 0)
+        st.subheader("Raw CSV Data (As Uploaded)")
+        st.dataframe(df, use_container_width=True)
 
-        def pick(colname):
-            return None if colname == "<none>" else df_raw[colname]
-
-        df = pd.DataFrame({
-            "call_id": pick(map_callid) if map_callid != "<none>" else pd.Series([None]*len(df_raw)),
-            "student_name": pick(map_student) if map_student != "<none>" else pd.Series([None]*len(df_raw)),
-            "year": pick(map_year) if map_year != "<none>" else pd.Series([None]*len(df_raw)),
-            "tech_stack": pick(map_stack) if map_stack != "<none>" else pd.Series([None]*len(df_raw)),
-            "location": pick(map_loc) if map_loc != "<none>" else pd.Series([None]*len(df_raw)),
-            "remarks": pick(map_remarks) if map_remarks != "<none>" else pd.Series([""]*len(df_raw)),
-            "date": pick(map_date) if map_date != "<none>" else pd.Series([None]*len(df_raw)),
-            "label": pick(map_label) if map_label != "<none>" else pd.Series([None]*len(df_raw)),
-        })
-
-        if "date" in df.columns:
-            df["date_parsed"] = df["date"].apply(safe_parse_date)
+        # Combine all text columns automatically
+        text_cols = df.select_dtypes(include="object").columns
+        if len(text_cols) > 0:
+            df["combined_text"] = df[text_cols].astype(str).agg(" ".join, axis=1)
         else:
-            df["date_parsed"] = None
+            df["combined_text"] = ""
     else:
         df = None
-
 # -----------------------------
 # Transcribe Audio
 # -----------------------------
 transcripts = []
 if audio_files and input_mode in ["Audio Feedback", "Full CSV Analytics"]:
     st.subheader("2) Transcribe Audio")
+
     if asr_engine == "Whisper":
-        try:
-            whisper_model = load_whisper(whisper_size)
-        except Exception as e:
-            st.error(str(e))
-            whisper_model = None
-    else:
-        try:
-            vosk_model = load_vosk(vosk_model_dir)
-        except Exception as e:
-            st.error(str(e))
-            vosk_model = None
+        whisper_model = load_whisper(whisper_size)
 
     prog = st.progress(0)
 
-for i, f in enumerate(audio_files):
-    audio_bytes = f.read()
-    suffix = os.path.splitext(f.name)[1] or ".wav"
+    for i, f in enumerate(audio_files):   # INSIDE
+        audio_bytes = f.read()
+        suffix = os.path.splitext(f.name)[1] or ".wav"
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
 
-    try:
-        if asr_engine == "Whisper" and whisper_model is not None:
+        try:
             result = whisper_model.transcribe(tmp_path)
             text = result.get("text", "").strip()
             if not text:
                 text = "[No speech detected]"
-        else:
-            text = "[ASR not available]"
-    except Exception as e:
-        text = f"[Whisper error: {e}]"
-    finally:
-        try:
+        except Exception as e:
+            text = f"[Whisper error: {e}]"
+        finally:
             os.remove(tmp_path)
-        except Exception:
-            pass
 
-    transcripts.append({
-        "call_id": os.path.splitext(f.name)[0],
-        "transcript_text": text
-    })
+        transcripts.append({
+            "call_id": os.path.splitext(f.name)[0],
+            "transcript_text": text
+        })
 
-    prog.progress(int(((i + 1) / len(audio_files)) * 100))
+        prog.progress(int(((i + 1) / len(audio_files)) * 100))
 
-st.success(f"Transcribed {len(transcripts)} file(s)")
+    st.success(f"Transcribed {len(transcripts)} file(s)")
 if transcripts:
     df_tr = pd.DataFrame(transcripts)
 else:
@@ -396,37 +405,89 @@ if (
     and df is None
     and not df_tr.empty
 ):
-    st.subheader("Sentiment Analysis (Audio Only)")
-
+    st.subheader("Sentiment & Objection Analysis (Audio Only)")
+    # Load models ONCE
     nlp = load_hf_pipeline()
+    zero_shot = load_zero_shot()
 
+    # ALWAYS define lists BEFORE loop
     sentiments = []
     scores = []
+    objections = []
+
+    objection_labels = [
+        "Fees / Pricing",
+        "Timing / Schedule",
+        "Placement / Career",
+        "Location / Travel",
+        "Course Content",
+        "General Query"
+    ]
 
     for txt in df_tr["transcript_text"].fillna(""):
+        # ---------- SENTIMENT ----------
         try:
             r = nlp(txt[:4096])[0]
             sentiments.append(r["label"].lower())
             scores.append(float(r.get("score", 0)))
         except Exception:
             sentiments.append("neutral")
-            scores.append(0)
+            scores.append(0.0)
 
+        # ---------- OBJECTION (AI BASED) ----------
+        if txt.strip() == "" or txt.startswith("["):
+            objections.append("No Feedback")
+        else:
+            try:
+                z = zero_shot(txt, candidate_labels=objection_labels)
+                objections.append(z["labels"][0])
+            except Exception:
+                objections.append("General Query")
+
+    # Attach to dataframe
     df_tr["sentiment"] = sentiments
     df_tr["confidence_score"] = scores
+    df_tr["objection_type"] = objections
 
-    # new ADDED
+    # Prepare merged
     merged = df_tr.copy()
     merged["combined_text"] = merged["transcript_text"]
     merged["sentiment_score"] = merged["confidence_score"]
 
-    st.dataframe(df_tr, use_container_width=True)
+    st.dataframe(merged, use_container_width=True)
 
-    avg_score = np.mean(scores) if scores else 0
-    st.success(f"Overall Sentiment: {max(set(sentiments), key=sentiments.count).upper()}")
-    st.info(f"Average Confidence Score: {avg_score:.2f}")
-    
+   
 
+    # -----------------------------
+# Charts (FIXED – Audio Only)
+# -----------------------------
+if merged is not None and not merged.empty:
+    st.subheader("Sentiment & Objection Charts")
+
+    col1, col2 = st.columns(2)
+
+    # PIE CHART – Sentiment
+    with col1:
+        fig_sent = px.pie(
+            merged,
+            names="sentiment",
+            title="Sentiment Distribution"
+        )
+        st.plotly_chart(fig_sent, use_container_width=True)
+
+    # BAR CHART – Objections
+    with col2:
+        fig_obj = px.bar(
+            merged,
+            x="objection_type",
+            title="Objection Type Distribution"
+        )
+        st.plotly_chart(fig_obj, use_container_width=True)
+
+    # Summary (SAFE)
+    overall = merged["sentiment"].mode()[0]
+    st.success(f"Overall Sentiment: {overall.upper()}")
+    st.info(f"Average Confidence Score: {merged['confidence_score'].mean():.2f}")
 
     
 # -----------------------------
@@ -440,59 +501,25 @@ if (
 if df is not None:
     st.subheader("3) Merge Logs + Transcripts")
 
-    # Ensure call_id is string for safe merge
-    if "call_id" in df.columns:
+    # CASE 1: CSV + AUDIO (call_id exists)
+    if "call_id" in df.columns and not df_tr.empty:
         df["call_id"] = df["call_id"].astype(str)
-
-    if "call_id" in df_tr.columns:
         df_tr["call_id"] = df_tr["call_id"].astype(str)
-
-    # Merge logic
-    if df["call_id"].notna().any() and not df_tr.empty:
         merged = pd.merge(df, df_tr, on="call_id", how="outer")
+
+    # CASE 2: CSV ONLY (most common)
     else:
         merged = df.copy()
-        if not df_tr.empty:
-            extra = pd.DataFrame({
-                "call_id": df_tr["call_id"],
-                "student_name": None,
-                "year": None,
-                "tech_stack": None,
-                "location": None,
-                "remarks": "",
-                "date": None,
-                "label": None,
-                "date_parsed": None,
-                "transcript_text": df_tr["transcript_text"]
-            })
-            merged = pd.concat([merged, extra], ignore_index=True)
-
-    # Ensure required text columns exist
-    if "remarks" not in merged.columns:
-        merged["remarks"] = ""
-    else:
-        merged["remarks"] = merged["remarks"].fillna("")
-
-    if "transcript_text" not in merged.columns:
         merged["transcript_text"] = ""
-    else:
-        merged["transcript_text"] = merged["transcript_text"].fillna("")
-
-    #  SINGLE, CORRECT combined_text CREATION
-    merged["combined_text"] = (
-        merged["remarks"].astype(str)
-        + " "
-        + merged["transcript_text"].astype(str)
-    ).str.strip()
 
     st.dataframe(merged.head(50), use_container_width=True)
-
 else:
     merged = None
 # -----------------------------
 # Sentiment: Train or Pretrained
 # -----------------------------
-if merged is not None and len(merged) > 0:
+#if merged is not None and len(merged) > 0:
+if input_mode == "Full CSV Analytics" and merged is not None and not merged.empty:
     st.subheader("4) Sentiment Analysis")
     can_train = ("label" in merged.columns) and merged["label"].notna().any() and not use_pretrained
 
@@ -647,7 +674,7 @@ if merged is not None and len(merged) > 0:
         out_csv.to_csv(out_buf, index=False)
         st.download_button("Download processed CSV", data=out_buf.getvalue(), file_name=f"softpro_processed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv")
 
-else:
-    st.info("Upload at least a CSV or audio to proceed.")
+#else:
+    #st.info("Upload at least a CSV or audio to proceed.")
 
 # End of app
