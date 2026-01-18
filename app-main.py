@@ -300,17 +300,46 @@ if input_mode == "Text Feedback":
     if user_text.strip():
         st.subheader("Sentiment Result")
 
-        nlp = load_hf_pipeline()
-        result = nlp(user_text[:4096])[0]
+        text_lower = user_text.lower()
 
-        sentiment = result["label"].lower()
-        score = result["score"]
+        complaint_keywords = [
+            "fee", "fees", "expensive", "cost", "pricing",
+            "not affordable", "too high", "overpriced",
+            "roi", "refund", "money"
+        ]
 
-        st.success(f"Sentiment: {sentiment.upper()}")
-        st.info(f"Confidence Score: {score:.2f}")
+        # -------- LAYER 1: HARD COMPLAINT --------
+        if any(word in text_lower for word in complaint_keywords):
+            sentiment = "negative"
+            st.error("Sentiment: NEGATIVE")
+            st.info("Detected: Pricing / fee related complaint")
+
+        else:
+            # -------- LAYER 2: ZERO-SHOT --------
+            zero_shot = load_zero_shot()
+            zs = zero_shot(
+                user_text,
+                candidate_labels=["complaint", "praise", "query", "neutral"]
+            )
+
+            top_label = zs["labels"][0]
+
+            if top_label == "complaint":
+                st.error("Sentiment: NEGATIVE")
+                st.info("Detected: Complaint")
+
+            else:
+                # -------- LAYER 3: SENTIMENT MODEL --------
+                nlp = load_hf_pipeline()
+                result = nlp(user_text[:4096])[0]
+
+                sentiment = result["label"].lower()
+                score = result["score"]
+
+                st.success(f"Sentiment: {sentiment.upper()}")
+                st.info(f"Confidence Score: {score:.2f}")
     else:
         st.info("Please enter some text to analyze sentiment.")
-
 
 # -----------------------------
 # File Uploaders
