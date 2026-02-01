@@ -64,6 +64,40 @@ from transformers import pipeline
 # Streamlit Page Config
 # -----------------------------
 st.set_page_config(page_title="College Sentiment & Feedback Insights", layout="wide")
+
+st.markdown("""
+<style>
+
+/* CENTER IMAGE */
+div[data-testid="column"] img {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 6px;
+}
+
+/* BUTTON EXACTLY BELOW IMAGE */
+button[kind="secondary"] {
+    display: block;
+    width: 160px;
+    margin-left: auto;
+    margin-right: auto;
+    border-radius: 10px;
+    font-weight: 600;
+    background-color: white;
+    border: 2px solid #dcdcdc;
+}
+
+/* HOVER BLUE */
+button[kind="secondary"]:hover {
+    background-color: #2b6cb0 !important;
+    color: white !important;
+    border-color: #2b6cb0 !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
 # -----------------------------
 # APP HEADER 
 # -----------------------------
@@ -74,48 +108,65 @@ def load_image_base64(path):
         return base64.b64encode(f.read()).decode()
 
 logo_base64 = load_image_base64("gnct logo.jpg")
-
 st.markdown(
     f"""
-    <style>
-        .app-header {{
-            text-align: center;
-            margin-top: 10px;
-            margin-bottom: 25px;
-        }}
-        .app-header img {{
-            width: 110px;
-            margin-bottom: 8px;
-        }}
-        .app-header h1 {{
-            font-size: 32px;
-            margin: 4px 0;
-            font-weight: 700;
-        }}
-        .app-header p {{
-            font-size: 14px;
-            opacity: 0.7;
-            margin: 0;
-        }}
-    </style>
-
-    <div class="app-header">
-        <img src="data:image/png;base64,{logo_base64}" />
-        <h1>GREATER NOIDA COLLEGE SENTIMENT ANALYSIS</h1>
-        <p>Audio + CRM Logs → Transcripts → Sentiment → Insights → Recommendations</p>
+    <div style="text-align:center; margin-bottom:25px;">
+        <img src="data:image/jpeg;base64,{logo_base64}" width="90" style="margin-bottom:12px;">
+        <h1 style="margin:0;">GREATER NOIDA COLLEGE SENTIMENT ANALYSIS</h1>
+        <p style="margin-top:6px; color:gray; font-size:15px;">
+            Audio + CRM Logs → Transcript → Sentiment → Insights → Recommendations
+        </p>
     </div>
     """,
     unsafe_allow_html=True
 )
+# -------- CARD IMAGES (ADD HERE) --------
+audio_img = load_image_base64("audio_image.jpeg")
+text_img = load_image_base64("text_image.jpeg")
+crm_img = load_image_base64("crm_image.jpeg")
+csv_img = load_image_base64("full_image.jpeg")
 
-#new code adding---------1st
 st.markdown("## Select Feedback Input Mode")
 
-input_mode = st.radio(
-    "Choose how feedback is provided",
-    ["Audio Feedback", "Text Feedback", "CRM Text Log", "Full CSV Analytics"],
-    horizontal=True
-)
+# ---------- INPUT MODE STATE ----------
+if "input_mode" not in st.session_state:
+    st.session_state.input_mode = ""
+
+
+#cards
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    st.image("audio_image.jpeg", width=180)
+    cls = "mode-btn-active" if st.session_state.input_mode == "Audio Feedback" else "mode-btn"
+    if st.button("Audio Feedback", key="audio"):
+        st.session_state.input_mode = "Audio Feedback"
+    
+
+with c2:
+    st.image("text_image.jpeg", width=180)
+    cls = "mode-btn-active" if st.session_state.input_mode == "Text Feedback" else "mode-btn"
+    if st.button("Text Feedback", key="text"):
+        st.session_state.input_mode = "Text Feedback"
+    
+
+with c3:
+    st.image("crm_image.jpeg", width=180)
+    cls = "mode-btn-active" if st.session_state.input_mode == "CRM Text Log" else "mode-btn"
+    if st.button("CRM Text Log", key="crm"):
+        st.session_state.input_mode = "CRM Text Log"
+    
+
+with c4:
+    st.image("full_image.jpeg", width=180)
+    cls = "mode-btn-active" if st.session_state.input_mode == "Full CSV Analytics" else "mode-btn"
+    if st.button("Full CSV Analytics", key="csv"):
+        st.session_state.input_mode = "Full CSV Analytics"
+    
+
+
+#input_mode = st.session_state.input_mode
+
 # -----------------------------
 # 1) Upload Data (MODE-WISE)
 # -----------------------------
@@ -124,14 +175,16 @@ csv_file = None
 crm_txt = None
 user_text = ""
 
-if input_mode == "Audio Feedback":
+#if input_mode == "Audio Feedback":
+if st.session_state.input_mode == "Audio Feedback":
     st.subheader("Upload Call Recordings")
     audio_files = st.file_uploader(
         "Upload call recordings (any audio file)",
         accept_multiple_files=True
     )
 
-elif input_mode == "Text Feedback":
+#elif input_mode == "Text Feedback":
+elif st.session_state.input_mode == "Text Feedback":
     st.subheader("Text Feedback Analysis")
     user_text = st.text_area(
         "Enter Student Feedback",
@@ -142,16 +195,18 @@ elif input_mode == "Text Feedback":
 # Text Feedback Sentiment
 # -----------------------------
 
-elif input_mode == "CRM Text Log":
+#elif input_mode == "CRM Text Log":
+elif st.session_state.input_mode == "CRM Text Log":
     st.subheader("CRM / Admission Log Analysis")
     crm_txt = st.file_uploader(
         "Upload CRM log (.txt file)",
         type=["txt"]
     )
-    # -----------------------------
 
 
-elif input_mode == "Full CSV Analytics":
+
+#elif input_mode == "Full CSV Analytics":
+elif st.session_state.input_mode == "Full CSV Analytics":
     st.subheader("Upload CSV Logs")
     csv_file = st.file_uploader(
         "Upload CSV logs (student, year, course, remarks, etc.)",
@@ -291,7 +346,7 @@ def transcribe_with_vosk(audio_bytes: bytes, model, filename: str) -> str:
         except Exception:
             pass
 
-        # -----------------------------
+# -----------------------------
 # Batch Sentiment Helper (CSV SPEED FIX)
 # -----------------------------
 def batch_sentiment_analysis(texts, batch_size=16):
@@ -318,9 +373,9 @@ def batch_sentiment_analysis(texts, batch_size=16):
                 scores.append(0.0)
 
     return sentiments, scores
-        # CRM Text Log Sentiment
+# CRM Text Log Sentiment
 # -----------------------------
-if input_mode == "CRM Text Log" and crm_txt is not None:
+if st.session_state.input_mode == "CRM Text Log" and crm_txt is not None:
     text_data = crm_txt.read().decode("utf-8")
 
     st.subheader("CRM Log Preview")
@@ -354,7 +409,7 @@ if input_mode == "CRM Text Log" and crm_txt is not None:
 # -----------------------------
 # TEXT FEEDBACK SENTIMENT (WORKING)
 # -----------------------------
-if input_mode == "Text Feedback":
+if st.session_state.input_mode == "Text Feedback":
 
     if user_text.strip():
         st.subheader("Sentiment Result")
@@ -433,7 +488,7 @@ merged = None
 # -----------------------------
 # Load DataFrame + Column Mapping
 # -----------------------------
-if input_mode == "Full CSV Analytics" and csv_file is not None:
+if st.session_state.input_mode == "Full CSV Analytics" and csv_file is not None:
 
     try:
         df = pd.read_csv(csv_file)
@@ -497,13 +552,11 @@ if input_mode == "Full CSV Analytics" and csv_file is not None:
 if merged is not None and "transcript_text" in merged.columns:
     merged.drop(columns=["transcript_text"], inplace=True)
 
-else:
-    df = None
 # -----------------------------
 # Transcribe Audio
 # -----------------------------
 transcripts = []
-if audio_files and input_mode == "Audio Feedback" and input_mode != "Full CSV Analytics":
+if audio_files and st.session_state.input_mode == "Audio Feedback" and st.session_state.input_mode!= "Full CSV Analytics":
     st.subheader("2) Transcribe Audio")
 
     if asr_engine == "Whisper":
@@ -542,7 +595,7 @@ if transcripts:
 else:
     df_tr = pd.DataFrame(columns=["call_id", "transcript_text"])  # empty
     # ALWAYS create merged for Audio Feedback (THIS RESTORES CHARTS)
-if input_mode == "Audio Feedback" and df is None:
+if st.session_state.input_mode == "Audio Feedback" and df is None:
     merged = pd.DataFrame({
         "call_id": df_tr["call_id"],
         "student_name": None,
@@ -559,7 +612,7 @@ if input_mode == "Audio Feedback" and df is None:
     merged["combined_text"] = merged["transcript_text"].astype(str)
 
 if (
-    input_mode == "Audio Feedback"
+    st.session_state.input_mode == "Audio Feedback"
     and df is None
     and not df_tr.empty
 ):
@@ -619,7 +672,7 @@ if (
     # -----------------------------
 # Charts (FIXED – Audio Only)
 # -----------------------------
-if( input_mode == "Audio Feedback"
+if( st.session_state.input_mode == "Audio Feedback"
     and merged is not None
     and not merged.empty
     and "objection_type" in merged.columns):
@@ -648,7 +701,7 @@ if( input_mode == "Audio Feedback"
         else:
             st.info("Objection analysis is available only for Audio Feedback mode.")
 
-    # Summary (SAFE)
+    # Summary 
     overall = merged["sentiment"].mode()[0]
     st.success(f"Overall Sentiment: {overall.upper()}")
     st.info(f"Average Confidence Score: {merged['confidence_score'].mean():.2f}")
@@ -658,8 +711,8 @@ if( input_mode == "Audio Feedback"
 #-------------------------------
 # Sentiment: Train or Pretrained
 # -----------------------------
-#if merged is not None and len(merged) > 0:
-if input_mode == "Full CSV Analytics" and merged is not None and not merged.empty:
+
+if st.session_state.input_mode == "Full CSV Analytics" and merged is not None and not merged.empty:
     st.subheader("4) Sentiment Analysis")
     can_train = ("label" in merged.columns) and merged["label"].notna().any() and not use_pretrained
 
