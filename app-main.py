@@ -23,7 +23,6 @@
 #   student_name, year, tech_stack, location (Noida/Lucknow), remarks, call_id, date (YYYY-MM-DD or any parseable date)
 #   Optional: label (positive/neutral/negative) for training a custom model.
 # - If label column is present, we train TF-IDF + LogisticRegression and use it; otherwise we fallback to a Hugging Face pretrained pipeline.
-
 import os
 import io
 import tempfile
@@ -64,20 +63,51 @@ from transformers import pipeline
 # -----------------------------
 # Streamlit Page Config
 # -----------------------------
-#st.set_page_config(page_title="College Sentiment & Feedback Insights", layout="wide")
-#st.title("College Sentiment & Feedback Insights")
-#st.caption("Audio + CRM logs → Transcripts → Sentiment → Insights → Recommendations")
-st.set_page_config(page_title="Softpro Sentiment & Sales Insights", layout="wide")
+st.set_page_config(page_title="College Sentiment & Feedback Insights", layout="wide")
+# -----------------------------
+# APP HEADER 
+# -----------------------------
+import base64
 
-# Header layout
-col_logo, col_title = st.columns([1, 6])
+def load_image_base64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 
-with col_logo:
-    st.image("gnct logo.jpg", width=90)
+logo_base64 = load_image_base64("gnct logo.jpg")
 
-with col_title:
-    st.markdown("## College Sentiment & Feedback Insights")
-    st.caption("Audio + CRM logs → Transcripts → Sentiment → Insights → Recommendations")
+st.markdown(
+    f"""
+    <style>
+        .app-header {{
+            text-align: center;
+            margin-top: 10px;
+            margin-bottom: 25px;
+        }}
+        .app-header img {{
+            width: 110px;
+            margin-bottom: 8px;
+        }}
+        .app-header h1 {{
+            font-size: 32px;
+            margin: 4px 0;
+            font-weight: 700;
+        }}
+        .app-header p {{
+            font-size: 14px;
+            opacity: 0.7;
+            margin: 0;
+        }}
+    </style>
+
+    <div class="app-header">
+        <img src="data:image/png;base64,{logo_base64}" />
+        <h1>GREATER NOIDA COLLEGE SENTIMENT ANALYSIS</h1>
+        <p>Audio + CRM Logs → Transcripts → Sentiment → Insights → Recommendations</p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
 #new code adding---------1st
 st.markdown("## Select Feedback Input Mode")
 
@@ -104,12 +134,12 @@ if input_mode == "Audio Feedback":
 elif input_mode == "Text Feedback":
     st.subheader("Text Feedback Analysis")
     user_text = st.text_area(
-        "Enter student/staff feedback",
+        "Enter Student Feedback",
         height=180,
         placeholder="Example: I faced issues during admission counselling..."
     )
 # -----------------------------
-# Text Feedback Sentiment (ADD THIS)
+# Text Feedback Sentiment
 # -----------------------------
 
 elif input_mode == "CRM Text Log":
@@ -260,6 +290,34 @@ def transcribe_with_vosk(audio_bytes: bytes, model, filename: str) -> str:
             os.remove(path)
         except Exception:
             pass
+
+        # -----------------------------
+# Batch Sentiment Helper (CSV SPEED FIX)
+# -----------------------------
+def batch_sentiment_analysis(texts, batch_size=16):
+    nlp = load_hf_pipeline()
+    sentiments = []
+    scores = []
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+
+        try:
+            results = nlp(
+                batch,
+                truncation=True,
+                padding=True,
+                max_length=256
+            )
+            for r in results:
+                sentiments.append(r["label"].lower())
+                scores.append(float(r["score"]))
+        except Exception:
+            for _ in batch:
+                sentiments.append("neutral")
+                scores.append(0.0)
+
+    return sentiments, scores
         # CRM Text Log Sentiment
 # -----------------------------
 if input_mode == "CRM Text Log" and crm_txt is not None:
@@ -291,12 +349,13 @@ if input_mode == "CRM Text Log" and crm_txt is not None:
         title="CRM Sentiment Confidence"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
-    
-        # -----------------------------
+    st.plotly_chart(fig, use_container_width=True, key="crm_sentiment_chart")
+
+# -----------------------------
 # TEXT FEEDBACK SENTIMENT (WORKING)
 # -----------------------------
 if input_mode == "Text Feedback":
+
     if user_text.strip():
         st.subheader("Sentiment Result")
 
@@ -308,39 +367,63 @@ if input_mode == "Text Feedback":
             "roi", "refund", "money"
         ]
 
-        # -------- LAYER 1: HARD COMPLAINT --------
         if any(word in text_lower for word in complaint_keywords):
             sentiment = "negative"
+            score = 0.90
             st.error("Sentiment: NEGATIVE")
-            st.info("Detected: Pricing / fee related complaint")
+            st.info(f"Confidence Score: {score:.2f}")
 
         else:
-            # -------- LAYER 2: ZERO-SHOT --------
-            zero_shot = load_zero_shot()
-            zs = zero_shot(
-                user_text,
-                candidate_labels=["complaint", "praise", "query", "neutral"]
-            )
+            nlp = load_hf_pipeline()
+            result = nlp(user_text[:4096])[0]
+            sentiment = result["label"].lower()
+            score = result["score"]
+            st.success(f"Sentiment: {sentiment.upper()}")
+            st.info(f"Confidence Score: {score:.2f}")
 
-            top_label = zs["labels"][0]
+        chart_df = pd.DataFrame({
+            "Sentiment": [sentiment.capitalize()],
+            "Score": [score]
+        })
 
-            if top_label == "complaint":
-                st.error("Sentiment: NEGATIVE")
-                st.info("Detected: Complaint")
+        fig = px.bar(
+            chart_df,
+            x="Sentiment",
+            y="Score",
+            range_y=[0, 1],
+            title="Text Feedback Sentiment Confidence"
+        )
 
-            else:
-                # -------- LAYER 3: SENTIMENT MODEL --------
-                nlp = load_hf_pipeline()
-                result = nlp(user_text[:4096])[0]
+        st.plotly_chart(fig, use_container_width=True, key="text_feedback_sentiment_chart")
 
-                sentiment = result["label"].lower()
-                score = result["score"]
+        st.subheader("Recommendations")
 
-                st.success(f"Sentiment: {sentiment.upper()}")
-                st.info(f"Confidence Score: {score:.2f}")
+        if sentiment == "negative":
+            st.warning("Action Required")
+            st.markdown("""
+            - Contact the student immediately  
+            - Address fee / timing / service issues  
+            - Improve counselling clarity
+            """)
+
+        elif sentiment == "positive":
+            st.success("Positive Feedback")
+            st.markdown("""
+            - Maintain service quality  
+            - Use this feedback as testimonial  
+            - Encourage referrals
+            """)
+
+        else:
+            st.info("Neutral Feedback")
+            st.markdown("""
+            - Ask follow-up questions  
+            - Provide clearer information  
+            - Improve explanation
+            """)
+
     else:
         st.info("Please enter some text to analyze sentiment.")
-
 # -----------------------------
 # File Uploaders
 # -----------------------------
@@ -350,31 +433,77 @@ merged = None
 # -----------------------------
 # Load DataFrame + Column Mapping
 # -----------------------------
-if input_mode == "Full CSV Analytics":
-    if csv_file is not None:
-        try:
-            df = pd.read_csv(csv_file)
-        except Exception:
-            df = pd.read_csv(csv_file, encoding="latin-1")
+if input_mode == "Full CSV Analytics" and csv_file is not None:
 
-        st.success(f"CSV loaded with shape {df.shape}")
+    try:
+        df = pd.read_csv(csv_file)
+    except Exception:
+        df = pd.read_csv(csv_file, encoding="latin-1")
 
-        st.subheader("Raw CSV Data (As Uploaded)")
-        st.dataframe(df, use_container_width=True)
+    # FORCE REMOVE transcript_text FROM BASE DATAFRAME
+    if "transcript_text" in df.columns:
+        df.drop(columns=["transcript_text"], inplace=True)
+    st.success(f"CSV loaded with shape {df.shape}")
 
-        # Combine all text columns automatically
-        text_cols = df.select_dtypes(include="object").columns
-        if len(text_cols) > 0:
-            df["combined_text"] = df[text_cols].astype(str).agg(" ".join, axis=1)
-        else:
-            df["combined_text"] = ""
+    # -------- RAW CSV DATA (DISPLAY ONLY, transcript removed visually) --------
+    st.subheader("Raw CSV Data (As Uploaded)")
+
+    raw_df = df.copy()
+    if "transcript_text" in raw_df.columns:
+        raw_df.drop(columns=["transcript_text"], inplace=True)
+
+    st.dataframe(raw_df, use_container_width=True)
+
+    # -------- COMBINED TEXT (EXCLUDE transcript_text COMPLETELY) --------
+    text_cols = [
+        col for col in df.select_dtypes(include="object").columns
+        if col != "transcript_text"
+    ]
+
+    if text_cols:
+        df["combined_text"] = df[text_cols].astype(str).agg(" ".join, axis=1)
     else:
-        df = None
+        df["combined_text"] = ""
+
+    # -------- PROCESSED CSV DATA --------
+    st.subheader("Processed CSV Data")
+
+    nlp = load_hf_pipeline()
+    processed_df = df.copy()
+
+    sentiments = []
+    confidence_scores = []
+
+    for txt in processed_df["combined_text"].fillna(""):
+        try:
+            r = nlp(txt[:4096])[0]
+            sentiments.append(r["label"].lower())
+            confidence_scores.append(float(r.get("score", 0)))
+        except Exception:
+            sentiments.append("neutral")
+            confidence_scores.append(0.0)
+
+    processed_df["sentiment_score"] = sentiments
+    processed_df["confidence_score"] = confidence_scores
+
+    # FORCE REMOVE transcript_text FROM FINAL OUTPUT
+    if "transcript_text" in processed_df.columns:
+        processed_df.drop(columns=["transcript_text"], inplace=True)
+
+    st.dataframe(processed_df, use_container_width=True)
+
+    merged = processed_df
+    
+if merged is not None and "transcript_text" in merged.columns:
+    merged.drop(columns=["transcript_text"], inplace=True)
+
+else:
+    df = None
 # -----------------------------
 # Transcribe Audio
 # -----------------------------
 transcripts = []
-if audio_files and input_mode in ["Audio Feedback", "Full CSV Analytics"]:
+if audio_files and input_mode == "Audio Feedback" and input_mode != "Full CSV Analytics":
     st.subheader("2) Transcribe Audio")
 
     if asr_engine == "Whisper":
@@ -490,7 +619,10 @@ if (
     # -----------------------------
 # Charts (FIXED – Audio Only)
 # -----------------------------
-if merged is not None and not merged.empty:
+if( input_mode == "Audio Feedback"
+    and merged is not None
+    and not merged.empty
+    and "objection_type" in merged.columns):
     st.subheader("Sentiment & Objection Charts")
 
     col1, col2 = st.columns(2)
@@ -502,16 +634,19 @@ if merged is not None and not merged.empty:
             names="sentiment",
             title="Sentiment Distribution"
         )
-        st.plotly_chart(fig_sent, use_container_width=True)
+        st.plotly_chart(fig_sent, use_container_width=True, key="audio_sentiment_pie")
 
     # BAR CHART – Objections
     with col2:
-        fig_obj = px.bar(
-            merged,
-            x="objection_type",
-            title="Objection Type Distribution"
-        )
-        st.plotly_chart(fig_obj, use_container_width=True)
+        if "objection_type" in merged.columns:
+            fig_obj = px.bar(
+               merged,
+               x="objection_type",
+               title="Objection Type Distribution"
+            )
+            st.plotly_chart(fig_obj, use_container_width=True, key="audio_objection_bar")
+        else:
+            st.info("Objection analysis is available only for Audio Feedback mode.")
 
     # Summary (SAFE)
     overall = merged["sentiment"].mode()[0]
@@ -519,32 +654,8 @@ if merged is not None and not merged.empty:
     st.info(f"Average Confidence Score: {merged['confidence_score'].mean():.2f}")
 
     
-# -----------------------------
-# Merge Transcripts with CSV
-# -----------------------------
-# Convert Audio-only feedback into analytics-compatible format
 
-# -----------------------------
-# Merge Transcripts with CSV
-# -----------------------------
-if df is not None:
-    st.subheader("3) Merge Logs + Transcripts")
-
-    # CASE 1: CSV + AUDIO (call_id exists)
-    if "call_id" in df.columns and not df_tr.empty:
-        df["call_id"] = df["call_id"].astype(str)
-        df_tr["call_id"] = df_tr["call_id"].astype(str)
-        merged = pd.merge(df, df_tr, on="call_id", how="outer")
-
-    # CASE 2: CSV ONLY (most common)
-    else:
-        merged = df.copy()
-        merged["transcript_text"] = ""
-
-    st.dataframe(merged.head(50), use_container_width=True)
-else:
-    merged = None
-# -----------------------------
+#-------------------------------
 # Sentiment: Train or Pretrained
 # -----------------------------
 #if merged is not None and len(merged) > 0:
@@ -600,15 +711,15 @@ if input_mode == "Full CSV Analytics" and merged is not None and not merged.empt
     colA, colB, colC = st.columns(3)
     with colA:
         fig = px.pie(merged, names="sentiment", title="Sentiment Distribution")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="csv_sentiment_pie")
     with colB:
         if "location" in merged.columns:
             fig2 = px.bar(merged.fillna({"location": "Unknown"}), x="location", color="sentiment", title="Sentiment by Location")
-            st.plotly_chart(fig2, use_container_width=True)
+            st.plotly_chart(fig2, use_container_width=True, key="csv_location_bar" )
     with colC:
         if "tech_stack" in merged.columns:
             fig3 = px.bar(merged.fillna({"tech_stack": "Unknown"}), x="tech_stack", color="sentiment", title="Sentiment by Tech Stack")
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig3, use_container_width=True, key="csv_tech_stack_bar")
 
     # Time trend
     if "date_parsed" in merged.columns and merged["date_parsed"].notna().any():
@@ -616,7 +727,7 @@ if input_mode == "Full CSV Analytics" and merged is not None and not merged.empt
         temp["month"] = temp["date_parsed"].dt.to_period("M").astype(str)
         ts = temp.groupby(["month", "sentiment"]).size().reset_index(name="count")
         fig4 = px.line(ts, x="month", y="count", color="sentiment", markers=True, title="Monthly Sentiment Trend")
-        st.plotly_chart(fig4, use_container_width=True)
+        st.plotly_chart(fig4, use_container_width=True, key="csv_monthly_trend")
 
     # Top Negative Keywords (TF-IDF on negative rows)
     st.markdown("### Top Negative Keywords")
@@ -629,7 +740,7 @@ if input_mode == "Full CSV Analytics" and merged is not None and not merged.empt
         vocab = np.array(vec.get_feature_names_out())
         kw_df = pd.DataFrame({"keyword": vocab, "score": sums}).sort_values("score", ascending=False).head(20)
         fig5 = px.bar(kw_df, x="keyword", y="score", title="Top Negative Keywords (TF-IDF)")
-        st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig5, use_container_width=True, key="csv_negative_keywords")
     else:
         st.info("Not enough negative samples to extract keywords.")
 
