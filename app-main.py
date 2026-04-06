@@ -67,6 +67,29 @@ from transformers import pipeline
 # -----------------------------
 st.set_page_config(page_title="College Sentiment & Feedback Insights", layout="wide")
 
+def toggle_theme():
+    config_dir = ".streamlit"
+    os.makedirs(config_dir, exist_ok=True)
+    config_path = os.path.join(config_dir, "config.toml")
+    is_dark = False
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            if 'base = "dark"' in f.read():
+                is_dark = True
+    new_theme = "light" if is_dark else "dark"
+    with open(config_path, "w") as f:
+        f.write(f'[theme]\nbase = "{new_theme}"\n')
+
+col_spacer, col_toggle = st.columns([0.88, 0.12])
+with col_toggle:
+    is_dark_mode = False
+    if os.path.exists(".streamlit/config.toml"):
+        with open(".streamlit/config.toml", "r") as f:
+            if 'base = "dark"' in f.read():
+                is_dark_mode = True
+    btn_label = "🌞 Light Mode" if is_dark_mode else "🌙 Dark Mode"
+    st.button(btn_label, on_click=toggle_theme, use_container_width=True, type="primary")
+
 st.markdown("""
 <style>
 
@@ -86,8 +109,10 @@ button[kind="secondary"] {
     margin-right: auto;
     border-radius: 10px;
     font-weight: 600;
-    background-color: white;
-    border: 2px solid #dcdcdc;
+    background-color: var(--background-color);
+    color: var(--text-color);
+    border: 2px solid var(--text-color);
+    transition: all 0.3s ease-in-out;
 }
 
 /* HOVER BLUE */
@@ -95,6 +120,24 @@ button[kind="secondary"]:hover {
     background-color: #2b6cb0 !important;
     color: white !important;
     border-color: #2b6cb0 !important;
+    transform: scale(1.05);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+/* ANIMATED TOGGLE BUTTON STYLING (PRIMARY BUTTON) */
+button[kind="primary"] {
+    border-radius: 25px !important;
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+    background: linear-gradient(135deg, #6e8efb, #a777e3) !important;
+    color: white !important;
+    border: none !important;
+    font-weight: 700 !important;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.15) !important;
+}
+
+button[kind="primary"]:hover {
+    transform: scale(1.05) translateY(-2px) !important;
+    box-shadow: 0 8px 25px rgba(110, 142, 251, 0.5) !important;
 }
 
 </style>
