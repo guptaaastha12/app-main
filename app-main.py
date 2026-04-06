@@ -1,4 +1,4 @@
-# Softpro Sentiment & Sales Insights – Streamlit Prototype
+# College Sentiment & Sales Insights – Streamlit Prototype
 # -------------------------------------------------------
 # Postmortem Shala Style: End-to-end app to
 # 1) Upload audio + CSV
