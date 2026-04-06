@@ -40,6 +40,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 
+import google.generativeai as genai
+
 
 #set the Enviroment Variable :-
 os.environ["PATH"] += os.pathsep + r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
@@ -229,6 +231,13 @@ use_pretrained = st.sidebar.checkbox("Force Pretrained Sentiment (skip training 
 st.sidebar.markdown("---")
 st.sidebar.write("**Export**")
 save_intermediate = st.sidebar.checkbox("Save processed CSV", value=True)
+
+st.sidebar.markdown("---")
+st.sidebar.write("**Gemini Integration**")
+gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", value="AIzaSyAgiAnCqXEO-JUAI5l-M4xtYk10zRQwKBI", placeholder="Enter your API key...")
+enhance_transcript = st.sidebar.checkbox("Enhance ASR Transcripts via Gemini", value=False)
+if gemini_api_key:
+    genai.configure(api_key=gemini_api_key)
 
 # -----------------------------
 # Utilities
@@ -453,29 +462,51 @@ if st.session_state.input_mode == "Text Feedback":
 
         st.subheader("Recommendations")
 
-        if sentiment == "negative":
-            st.warning("Action Required")
-            st.markdown("""
-            - Contact the student immediately  
-            - Address fee / timing / service issues  
-            - Improve counselling clarity
-            """)
-
-        elif sentiment == "positive":
-            st.success("Positive Feedback")
-            st.markdown("""
-            - Maintain service quality  
-            - Use this feedback as testimonial  
-            - Encourage referrals
-            """)
-
+        if gemini_api_key:
+            with st.spinner("Generating AI Recommendation for this student..."):
+                try:
+                    import time
+                    gen_model = genai.GenerativeModel('gemini-2.5-flash')
+                    prompt = f"A student provided this feedback which was analyzed as {sentiment.upper()}:\n\n\"{user_text}\"\n\nBased on this, what are 2-3 specific, actionable steps the college administration should take to address this specific feedback? Keep it brief and format as bullet points."
+                    for attempt in range(3):
+                        try:
+                            response = gen_model.generate_content(prompt)
+                            st.markdown(response.text)
+                            break
+                        except Exception as e:
+                            if "429" in str(e) or "Quota" in str(e):
+                                if attempt < 2:
+                                    time.sleep(30)
+                                else:
+                                    raise e
+                            else:
+                                raise e
+                except Exception as e:
+                    st.error(f"Gemini Recommendation generation failed: {e}")
         else:
-            st.info("Neutral Feedback")
-            st.markdown("""
-            - Ask follow-up questions  
-            - Provide clearer information  
-            - Improve explanation
-            """)
+            if sentiment == "negative":
+                st.warning("Action Required")
+                st.markdown("""
+                - Contact the student immediately  
+                - Address fee / timing / service issues  
+                - Improve counselling clarity
+                """)
+
+            elif sentiment == "positive":
+                st.success("Positive Feedback")
+                st.markdown("""
+                - Maintain service quality  
+                - Use this feedback as testimonial  
+                - Encourage referrals
+                """)
+
+            else:
+                st.info("Neutral Feedback")
+                st.markdown("""
+                - Ask follow-up questions  
+                - Provide clearer information  
+                - Improve explanation
+                """)
 
     else:
         st.info("Please enter some text to analyze sentiment.")
@@ -577,6 +608,27 @@ if audio_files and st.session_state.input_mode == "Audio Feedback" and st.sessio
             text = result.get("text", "").strip()
             if not text:
                 text = "[No speech detected]"
+            elif enhance_transcript and gemini_api_key:
+                try:
+                    import time
+                    gen_model = genai.GenerativeModel('gemini-2.5-flash')
+                    prompt = f"Improve the sentence quality and fix any ASR transcription mistakes in the following text. Return ONLY the improved text:\n\n{text}"
+                    for attempt in range(3):
+                        try:
+                            response = gen_model.generate_content(prompt)
+                            if response.text:
+                                text = response.text.strip()
+                            break
+                        except Exception as e:
+                            if "429" in str(e) or "Quota" in str(e):
+                                if attempt < 2:
+                                    time.sleep(30)
+                                else:
+                                    raise e
+                            else:
+                                raise e
+                except Exception as e:
+                    st.warning(f"Gemini enhancement error: {e}")
         except Exception as e:
             text = f"[Whisper error: {e}]"
         finally:
@@ -798,9 +850,50 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
         st.info("Not enough negative samples to extract keywords.")
 
     # -----------------------------
-    # Recommendations (rule + keyword heuristics)
+    # Recommendations (rule + keyword heuristics & Gemini AI)
     # -----------------------------
     st.subheader("6) Recommendations")
+
+    def get_ai_recommendations(df_: pd.DataFrame):
+        try:
+            total_records = len(df_)
+            sentiment_counts = df_['sentiment'].value_counts().to_dict()
+            
+            summary_prompt = f"You are an expert consultant for a college. Analyze the following student feedback sentiment data and provide 3-5 highly actionable recommendations to improve the college's services, courses, and administration.\n\n"
+            summary_prompt += f"Total Records: {total_records}\n"
+            summary_prompt += f"Overall Sentiment Distribution: {sentiment_counts}\n"
+            
+            if "location" in df_.columns:
+                loc_sent = df_.groupby("location")["sentiment"].value_counts().to_dict()
+                summary_prompt += f"Sentiment by Location: {loc_sent}\n"
+            
+            if "tech_stack" in df_.columns:
+                tech_sent = df_.groupby("tech_stack")["sentiment"].value_counts().to_dict()
+                summary_prompt += f"Sentiment by Tech Stack: {tech_sent}\n"
+            
+            neg_text = " ".join(df_[df_["sentiment"] == "negative"]["combined_text"].dropna().astype(str).tolist())[:4000]
+            if neg_text:
+                summary_prompt += f"\nSample of negative feedback from students:\n{neg_text}\n"
+                
+            summary_prompt += "\nPlease format your response nicely with markdown bullet points."
+            
+            import time
+            gen_model = genai.GenerativeModel('gemini-2.5-flash')
+            for attempt in range(3):
+                try:
+                    response = gen_model.generate_content(summary_prompt)
+                    return response.text
+                except Exception as e:
+                    if "429" in str(e) or "Quota" in str(e):
+                        if attempt < 2:
+                            time.sleep(30)
+                        else:
+                            raise e
+                    else:
+                        raise e
+        except Exception as e:
+            st.error(f"Gemini Recommendation generation failed: {e}")
+            return None
 
     def gen_recos(df_: pd.DataFrame):
         recos = []
@@ -850,12 +943,27 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
             recos.append("Career outcomes focus → showcase placement stats, resume/interview prep workshops.")
         return recos
 
-    recommendations = gen_recos(merged)
-    if recommendations:
-        for r in recommendations:
-            st.markdown(f"-{r}")
+    if gemini_api_key:
+        with st.spinner("Generating AI Recommendations using Gemini..."):
+            ai_recos = get_ai_recommendations(merged)
+            if ai_recos:
+                st.markdown(ai_recos)
+            else:
+                # Fallback to rule-based
+                recommendations = gen_recos(merged)
+                if recommendations:
+                    for r in recommendations:
+                        st.markdown(f"- {r}")
+                else:
+                    st.info("No strong recommendations detected. With more data, insights will improve.")
     else:
-        st.info("No strong recommendations detected. With more data, insights will improve.")
+        # Use rule-based recommendations
+        recommendations = gen_recos(merged)
+        if recommendations:
+            for r in recommendations:
+                st.markdown(f"- {r}")
+        else:
+            st.info("No strong recommendations detected. With more data, insights will improve.")
 
     # -----------------------------
     # Downloads
