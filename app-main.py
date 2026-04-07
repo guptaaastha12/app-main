@@ -277,7 +277,7 @@ save_intermediate = st.sidebar.checkbox("Save processed CSV", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Gemini Integration**")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", value="AIzaSyAgiAnCqXEO-JUAI5l-M4xtYk10zRQwKBI", placeholder="Enter your API key...")
+gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", placeholder="Enter your API key...")
 enhance_transcript = st.sidebar.checkbox("Enhance ASR Transcripts via Gemini", value=False)
 if gemini_api_key:
     genai.configure(api_key=gemini_api_key)
@@ -639,41 +639,57 @@ if audio_files and st.session_state.input_mode == "Audio Feedback" and st.sessio
     prog = st.progress(0)
 
     for i, f in enumerate(audio_files):   # INSIDE
+        f.seek(0)
         audio_bytes = f.read()
         suffix = os.path.splitext(f.name)[1] or ".wav"
 
+        if not audio_bytes:
+            transcripts.append({
+                "call_id": os.path.splitext(f.name)[0],
+                "transcript_text": "[Error: Empty audio data]"
+            })
+            prog.progress(int(((i + 1) / len(audio_files)) * 100))
+            continue
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(audio_bytes)
+            tmp.flush()
+            os.fsync(tmp.fileno())
             tmp_path = tmp.name
 
         try:
-            result = whisper_model.transcribe(tmp_path)
-            text = result.get("text", "").strip()
-            if not text:
-                text = "[No speech detected]"
-            elif enhance_transcript and gemini_api_key:
-                try:
-                    import time
-                    gen_model = genai.GenerativeModel('gemini-2.5-flash')
-                    prompt = f"Improve the sentence quality and fix any ASR transcription mistakes in the following text. Return ONLY the improved text:\n\n{text}"
-                    for attempt in range(3):
-                        try:
-                            response = gen_model.generate_content(prompt)
-                            if response.text:
-                                text = response.text.strip()
-                            break
-                        except Exception as e:
-                            if "429" in str(e) or "Quota" in str(e):
-                                if attempt < 2:
-                                    time.sleep(30)
+            # Check file size to avoid Whisper zero-element errors
+            if os.path.getsize(tmp_path) < 100:
+                text = "[Error: Audio file too small or empty]"
+            else:
+                result = whisper_model.transcribe(tmp_path, fp16=False)
+                text = result.get("text", "").strip()
+                if not text:
+                    text = "[No speech detected]"
+                elif enhance_transcript and gemini_api_key:
+                    try:
+                        import time
+                        gen_model = genai.GenerativeModel('gemini-2.5-flash')
+                        prompt = f"Improve the sentence quality and fix any ASR transcription mistakes in the following text. Return ONLY the improved text:\n\n{text}"
+                        for attempt in range(3):
+                            try:
+                                response = gen_model.generate_content(prompt)
+                                if response.text:
+                                    text = response.text.strip()
+                                break
+                            except Exception as e:
+                                if "429" in str(e) or "Quota" in str(e):
+                                    if attempt < 2:
+                                        time.sleep(30)
+                                    else:
+                                        raise e
                                 else:
                                     raise e
-                            else:
-                                raise e
-                except Exception as e:
-                    st.warning(f"Gemini enhancement error: {e}")
+                    except Exception as e:
+                        st.warning(f"Gemini enhancement error: {e}")
         except Exception as e:
-            text = f"[Whisper error: {e}]"
+            err_str = str(e)
+            text = f"[Error: Not a valid audio file or contains no audio. Details: {err_str}]"
         finally:
             os.remove(tmp_path)
 
