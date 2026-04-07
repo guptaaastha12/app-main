@@ -908,10 +908,14 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
     else:
         st.info("Not enough negative samples to extract keywords.")
 
-    # -----------------------------
-    # Recommendations (rule + keyword heuristics & Gemini AI)
-    # -----------------------------
-    st.subheader("6) Recommendations")
+# -----------------------------
+# Recommendations (rule + keyword heuristics & Gemini AI)
+# -----------------------------
+if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and merged is not None and not merged.empty and "sentiment" in merged.columns:
+    if st.session_state.input_mode == "Full CSV Analytics":
+        st.subheader("6) Recommendations")
+    else:
+        st.subheader("Recommendations")
 
     def get_ai_recommendations(df_: pd.DataFrame):
         try:
@@ -1027,7 +1031,10 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
     # -----------------------------
     # Downloads
     # -----------------------------
-    st.subheader("7) Export")
+    if st.session_state.input_mode == "Full CSV Analytics":
+        st.subheader("7) Export")
+    else:
+        st.subheader("Export")
     if save_intermediate:
         out_csv = merged.copy()
         out_buf = io.StringIO()
