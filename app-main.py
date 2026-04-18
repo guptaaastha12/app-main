@@ -26,6 +26,7 @@
 import os
 import io
 import tempfile
+import hashlib
 from datetime import datetime
 from dateutil import parser
 
@@ -34,6 +35,31 @@ import pandas as pd
 
 import streamlit as st
 import plotly.express as px
+import base64
+
+
+def toggle_theme():
+    config_path = ".streamlit/config.toml"
+
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            content = f.read()
+    else:
+        content = ""
+
+    if 'base="dark"' in content:
+        new_theme = "light"
+    else:
+        new_theme = "dark"
+
+    with open(config_path, "w") as f:
+        f.write(f'[theme]\nbase="{new_theme}"\n')
+
+
+def load_image_base64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
 
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -43,9 +69,15 @@ from sklearn.metrics import classification_report
 import google.generativeai as genai
 
 
-#set the Enviroment Variable :-
-os.environ["PATH"] += os.pathsep + r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
+# set the Enviroment Variable :-
+#os.environ["PATH"] += (
+  #  os.pathsep
+ #   + r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
+#)
+ffmpeg_path = r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
 
+if ffmpeg_path not in os.environ["PATH"]:
+    os.environ["PATH"] += os.pathsep + ffmpeg_path
 
 # Optional imports are wrapped – they may fail gracefully if not installed
 try:
@@ -62,35 +94,226 @@ except Exception:
 
 from transformers import pipeline
 
+
+def transcribe_with_whisper(audio_bytes: bytes, model, filename: str) -> str:
+    if not audio_bytes:
+        return "[Empty audio]"
+
+    suffix = os.path.splitext(filename)[1]
+    if not suffix:
+        suffix = ".wav"
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(audio_bytes)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_path = tmp.name
+
+    try:
+        result = model.transcribe(tmp_path, fp16=False)
+        text = result.get("text", "").strip()
+        return text if text else "[No speech detected]"
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+
+def load_whisper(model_size: str):
+    if whisper is None:
+        raise RuntimeError(
+            "Whisper not installed. pip install openai-whisper and ensure ffmpeg is present."
+        )
+    return whisper.load_model(model_size)
+
+
+
+def load_vosk(model_dir: str):
+    if not model_dir or not os.path.isdir(model_dir):
+        raise RuntimeError("Valid Vosk model directory not provided.")
+    if VoskModel is None:
+        raise RuntimeError("Vosk not installed. pip install vosk")
+    return VoskModel(model_dir)
+
+
+
+def load_hf_pipeline():
+    # Fast, widely used binary sentiment model
+    return pipeline(
+        "sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english"
+    )
+
+
+
+def load_zero_shot():
+
+    return pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+
+
+# ------------database setup start sql lite------------
+import sqlite3
+
+conn = sqlite3.connect("project.db")
+cursor = conn.cursor()
+
+# -------- USERS TABLE --------
+cursor.execute(
+    """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT,
+    password TEXT,
+    role TEXT,
+    manager_id INTEGER
+)
+"""
+)
+
+# -------- STUDENTS TABLE --------
+cursor.execute(
+    """
+CREATE TABLE IF NOT EXISTS students (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    mobile TEXT,
+    location TEXT,
+    counsellor_id INTEGER
+)
+"""
+)
+
+# -------- CALLS TABLE --------
+cursor.execute(
+    """
+CREATE TABLE IF NOT EXISTS calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER,
+    call_type TEXT,
+    transcript TEXT,
+    sentiment TEXT,
+    date TEXT,
+    audio_hash TEXT
+)
+"""
+)
+
+conn.commit()
+
+# -------- HANDLE OLD DATABASE (ADD COLUMN IF NOT EXISTS) --------
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN manager_id INTEGER")
+    conn.commit()
+except:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE calls ADD COLUMN audio_hash TEXT")
+    conn.commit()
+except:
+    pass
+
+# -------- DEFAULT USERS (ONLY IF EMPTY) --------
+cursor.execute("SELECT * FROM users")
+users = cursor.fetchall()
+
+if len(users) == 0:
+    cursor.execute(
+        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+        ("counsellor1", "123", "counsellor", None),
+    )
+    cursor.execute(
+        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+        ("manager1", "123", "manager", None),
+    )
+    cursor.execute(
+        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+        ("owner1", "123", "owner", None),
+    )
+    conn.commit()
+
+# ===== DATABASE SETUP END =====
+
 # -----------------------------
 # Streamlit Page Config
 # -----------------------------
 st.set_page_config(page_title="College Sentiment & Feedback Insights", layout="wide")
 
-def toggle_theme():
-    config_dir = ".streamlit"
-    os.makedirs(config_dir, exist_ok=True)
-    config_path = os.path.join(config_dir, "config.toml")
-    is_dark = False
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            if 'base = "dark"' in f.read():
-                is_dark = True
-    new_theme = "light" if is_dark else "dark"
-    with open(config_path, "w") as f:
-        f.write(f'[theme]\nbase = "{new_theme}"\n')
 
-col_spacer, col_toggle = st.columns([0.88, 0.12])
-with col_toggle:
+
+
+# -----------------TOGGLE--------------------------
+# TOGGLE BUTTON (TOP RIGHT)
+if "theme" not in st.session_state:
+    st.session_state.theme = "dark"
+
+# --------------------------LOGO------------------------
+logo_base64 = load_image_base64("gnct logo.jpg")
+
+st.markdown(
+    f"""
+        <div style="text-align:center; margin-bottom:25px;">
+            <img src="data:image/jpeg;base64,{logo_base64}" width="90" style="margin-bottom:12px;">
+            <h1 style="margin:0;">GREATER NOIDA COLLEGE SENTIMENT ANALYSIS</h1>
+            <p style="margin-top:6px; color:gray; font-size:15px;">
+                Audio + CRM Logs → Transcript → Sentiment → Insights → Recommendations
+            </p>
+        </div>
+        """,
+    unsafe_allow_html=True,
+)
+
+col1, col2 = st.columns([0.85, 0.15])
+
+with col2:
     is_dark_mode = False
     if os.path.exists(".streamlit/config.toml"):
         with open(".streamlit/config.toml", "r") as f:
-            if 'base = "dark"' in f.read():
+            if 'base="dark"' in f.read():
                 is_dark_mode = True
-    btn_label = "🌞 Light Mode" if is_dark_mode else "🌙 Dark Mode"
-    st.button(btn_label, on_click=toggle_theme, use_container_width=True, type="primary")
 
-st.markdown("""
+    btn_label = "🌞 Light Mode" if is_dark_mode else "🌙 Dark Mode"
+
+    st.button(
+        btn_label, on_click=toggle_theme, use_container_width=True, type="primary"
+    )
+# ===== PAGE CONTROL =====
+if "page" not in st.session_state:
+    st.session_state.page = "login"
+if "input_mode" not in st.session_state:
+    st.session_state.input_mode = ""
+# ===== LOGIN PAGE =====
+if st.session_state.page == "login":
+    st.title("Login")
+    role = st.selectbox("Login As", ["Counsellor", "Manager", "Owner"])
+    role = role.lower()
+    username = st.text_input("Username", key="login_user")
+    password = st.text_input("Password", type="password", key="login_pass")
+
+    if st.button("Login"):
+        role_db = role.lower()
+        cursor.execute(
+            "SELECT * FROM users WHERE username=? AND password=? AND role=?",
+            (username, password, role_db),
+        )
+        user = cursor.fetchone()
+
+        if user:
+            st.success("Login successful")
+            import time
+            time.sleep(1.5)
+            st.session_state.page = "dashboard"
+            st.session_state.role = user[3]  # role
+            st.session_state.user_id = user[0]
+            
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+
+st.markdown(
+    """
 <style>
 
 /* CENTER IMAGE */
@@ -141,76 +364,588 @@ button[kind="primary"]:hover {
 }
 
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # -----------------------------
-# APP HEADER 
+# APP HEADER
 # -----------------------------
 import base64
+#  GLOBAL LOGOUT (ADD HERE)
+if st.session_state.get("page") != "login":
 
-def load_image_base64(path):
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+    col1, col2 = st.columns([0.85, 0.15])
 
-logo_base64 = load_image_base64("gnct logo.jpg")
-st.markdown(
-    f"""
-    <div style="text-align:center; margin-bottom:25px;">
-        <img src="data:image/jpeg;base64,{logo_base64}" width="90" style="margin-bottom:12px;">
-        <h1 style="margin:0;">GREATER NOIDA COLLEGE SENTIMENT ANALYSIS</h1>
-        <p style="margin-top:6px; color:gray; font-size:15px;">
-            Audio + CRM Logs → Transcript → Sentiment → Insights → Recommendations
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    with col2:
+        if st.button(" Logout", key="global_logout"):
+            st.session_state.clear()
+            st.session_state.page = "login"
+            st.rerun()
+
+# ===== DASHBOARD =====
+if st.session_state.page == "dashboard":
+
+   
+
+    role = st.session_state.role
+
+
+    # =========================================================
+    # ================= COUNSELLOR PANEL =======================
+    # =========================================================
+    if role == "counsellor":
+
+        st.title("Counsellor Panel")
+
+        if st.button("Bulk Analysis", key="c_bulk"):
+            st.session_state.page = "bulk"
+
+        if st.button("Individual Analysis", key="c_individual"):
+            st.session_state.page = "individual"
+
+    # =========================================================
+    # ================= MANAGER PANEL =========================
+    # =========================================================
+    elif role == "manager":
+
+        st.title("Manager Panel")
+
+        if "active_section" not in st.session_state:
+            st.session_state.active_section = ""
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            if st.button("Add Counsellor", key="m_add"):
+                st.session_state.active_section = "add"
+
+        with col2:
+            if st.button("All Counsellors", key="m_list"):
+                st.session_state.active_section = "list"
+
+        with col3:
+            if st.button("Counsellor Performance", key="m_perf"):
+                st.session_state.active_section = "perf"
+
+        with col4:
+            if st.button("Counsellor Ranking", key="m_rank"):
+                st.session_state.active_section = "rank"
+
+        st.markdown("---")
+
+        # -------- ADD COUNSELLOR --------
+        if st.session_state.active_section == "add":
+
+            new_username = st.text_input("Username", key="m_user")
+            new_password = st.text_input("Password", type="password", key="m_pass")
+
+            if st.button("Add Counsellor", key="m_add_submit"):
+
+                cursor.execute("SELECT * FROM users WHERE username=?", (new_username,))
+                if cursor.fetchone():
+                    st.warning("Username exists")
+                else:
+                    cursor.execute(
+                        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+                        (new_username, new_password, "counsellor", st.session_state.user_id)
+                    )
+                    conn.commit()
+                    st.success("Added!")
+                    st.rerun()
+
+        # -------- LIST --------
+        elif st.session_state.active_section == "list":
+
+            cursor.execute(
+                "SELECT id, username FROM users WHERE role='counsellor' AND manager_id=?",
+                (st.session_state.user_id,)
+            )
+            counsellors = cursor.fetchall()
+
+            for c in counsellors:
+                col1, col2, col3 = st.columns([4,1,1])
+
+                with col1:
+                    st.write("👤", c[1])
+
+                with col2:
+                    if st.button("Edit", key=f"m_edit_{c[0]}"):
+                        st.session_state.edit_id = c[0]
+
+                with col3:
+                    if st.button("Delete", key=f"m_del_{c[0]}"):
+                        cursor.execute("DELETE FROM users WHERE id=?", (c[0],))
+                        conn.commit()
+                        st.rerun()
+
+        # -------- PERFORMANCE --------
+        elif st.session_state.active_section == "perf":
+
+            cursor.execute("""
+                SELECT users.username, COUNT(calls.id)
+                FROM users
+                LEFT JOIN students ON students.counsellor_id = users.id
+                LEFT JOIN calls ON calls.student_id = students.id
+                WHERE users.role='counsellor' AND users.manager_id=?
+                GROUP BY users.username
+            """, (st.session_state.user_id,))
+
+            data = cursor.fetchall()
+
+            if data:
+                df = pd.DataFrame(data, columns=["Counsellor", "Calls"])
+                st.bar_chart(df.set_index("Counsellor"))
+
+        # -------- RANKING --------
+        elif st.session_state.active_section == "rank":
+
+            cursor.execute("""
+                SELECT users.username, COUNT(calls.id) as total_calls
+                FROM users
+                LEFT JOIN students ON students.counsellor_id = users.id
+                LEFT JOIN calls ON calls.student_id = students.id
+                WHERE users.role='counsellor' AND users.manager_id=?
+                GROUP BY users.username
+                ORDER BY total_calls DESC
+            """, (st.session_state.user_id,))
+
+            data = cursor.fetchall()
+
+            if data:
+                df = pd.DataFrame(data, columns=["Counsellor", "Calls"])
+                df["Rank"] = df["Calls"].rank(method="dense", ascending=False).astype(int)
+                st.dataframe(df)
+
+    # =========================================================
+    # ================= OWNER PANEL (FIXED) ====================
+    # =========================================================
+    elif role == "owner":
+
+        st.title("Owner Dashboard")
+
+        # ===== COUNTS =====
+        cursor.execute("SELECT COUNT(*) FROM users WHERE role='counsellor'")
+        total_counsellors = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM students")
+        total_students = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM calls")
+        total_calls = cursor.fetchone()[0]
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Counsellors", total_counsellors)
+        c2.metric("Total Students", total_students)
+        c3.metric("Total Calls", total_calls)
+
+        st.markdown("---")
+
+        if "owner_section" not in st.session_state:
+            st.session_state.owner_section = ""
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            if st.button("Add Manager", key="o_manager"):
+                st.session_state.owner_section = "manager"
+
+        with col2:
+            if st.button("Counsellor", key="o_counsellor"):
+                st.session_state.owner_section = "counsellor"
+
+        with col3:
+            if st.button("Student Analytics", key="o_student"):
+                st.session_state.owner_section = "student"
+
+        st.markdown("---")
+
+        # -------- ADD MANAGER --------
+        if st.session_state.owner_section == "manager":
+
+            user = st.text_input("Username", key="o_user")
+            pwd = st.text_input("Password", type="password", key="o_pass")
+
+            if st.button("Add Manager", key="o_add_submit"):
+
+                cursor.execute("SELECT * FROM users WHERE username=?", (user,))
+                if cursor.fetchone():
+                    st.warning("Exists")
+                else:
+                    cursor.execute(
+                        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+                        (user, pwd, "manager", None)
+                    )
+                    conn.commit()
+                    st.success("Added")
+                    st.rerun()
+
+        # -------- COUNSELLOR --------
+        elif st.session_state.owner_section == "counsellor":
+
+            if "owner_tab" not in st.session_state:
+                st.session_state.owner_tab = "list"
+
+            tab1, tab2 = st.tabs(["List", "Performance"])
+
+            with tab1:
+                st.session_state.owner_tab = "list"
+
+                cursor.execute("SELECT id, username FROM users WHERE role='counsellor'")
+                data = cursor.fetchall()
+
+                st.write("Total:", len(data))
+
+                for c in data:
+                    col1, col2, col3 = st.columns([4,1,1])
+                    col1.write(c[1])
+
+                    if col2.button("Edit", key=f"o_edit_{c[0]}"):
+                        st.session_state.edit_id = c[0]
+
+                    if col3.button("Delete", key=f"o_del_{c[0]}"):
+                        cursor.execute("DELETE FROM users WHERE id=?", (c[0],))
+                        conn.commit()
+                        st.rerun()
+
+            with tab2:
+                st.session_state.owner_tab = "perf"
+
+                with tab2:
+                    st.session_state.owner_tab = "perf"
+
+                    cursor.execute("""
+                        SELECT 
+                            m.username AS manager,
+                            c.username AS counsellor,
+                            COUNT(calls.id) AS total_calls
+                        FROM users c
+                        LEFT JOIN users m ON c.manager_id = m.id
+                        LEFT JOIN students ON students.counsellor_id = c.id
+                        LEFT JOIN calls ON calls.student_id = students.id
+                        WHERE c.role = 'counsellor'
+                        GROUP BY m.username, c.username
+                        ORDER BY m.username
+                    """)
+
+                    data = cursor.fetchall()
+
+                    if data:
+                        df = pd.DataFrame(data, columns=["Manager", "Counsellor", "Calls"])
+
+                        st.subheader("Manager → Counsellor Performance")
+
+                        st.dataframe(df)
+
+                        import plotly.express as px
+
+                        fig = px.bar(
+                            df,
+                            x="Counsellor",
+                            y="Calls",
+                            color="Manager",
+                            title="Counsellor Performance Under Each Manager"
+                        )
+
+                        st.plotly_chart(fig, use_container_width=True)
+        # -------- STUDENT ANALYTICS --------
+        elif st.session_state.owner_section == "student":
+
+            cursor.execute("""
+                SELECT students.name, users.username, calls.sentiment
+                FROM calls
+                LEFT JOIN students ON calls.student_id = students.id
+                LEFT JOIN users ON students.counsellor_id = users.id
+            """)
+            data = cursor.fetchall()
+
+            if data:
+                df = pd.DataFrame(data, columns=["Student", "Counsellor", "Sentiment"])
+                st.dataframe(df)
+
+# ===== INDIVIDUAL ANALYSIS UI =====
+if st.session_state.page == "individual":
+
+    st.title("Individual Student Analysis")
+
+    # ---------- FETCH STUDENTS ----------
+    cursor.execute("SELECT id, name FROM students")
+    students = cursor.fetchall()
+
+    student_names = [s[1] for s in students]
+    options = ["-- New Student --"] + student_names
+
+    selected_student = st.selectbox(
+        "Select Existing Student",
+        options,
+        key="student_selectbox"
+    )
+
+    # ========= ADD NEW STUDENT =========
+    if selected_student == "-- New Student --":
+
+        st.subheader("Add New Student")
+
+        name = st.text_input("Student Name")
+        mobile = st.text_input("Mobile Number")
+        location = st.text_input("Location")
+        
+        if st.button("Save Student"):
+            
+
+            if name.strip() == "":
+                st.error("Name required")
+            else:
+                cursor.execute(
+                    "INSERT INTO students (name, mobile, location, counsellor_id) VALUES (?, ?, ?, ?)",
+                    (name, mobile, location, st.session_state.user_id)
+                )
+                conn.commit()
+                st.success("Student Saved!")
+                st.rerun()
+
+    # ========= EXISTING STUDENT =========
+    else:
+
+        st.subheader(f"Student: {selected_student}")
+
+        # ----- GET STUDENT ID -----
+        student_id = None
+        for s in students:
+            if s[1] == selected_student:
+                student_id = s[0]
+
+        if student_id is None:
+            st.error("Student ID not found")
+            st.stop()
+
+        st.write("Student ID:", student_id)
+
+        # ----- DELETE STUDENT -----
+        if st.button("Delete Student"):
+            cursor.execute("DELETE FROM calls WHERE student_id=?", (student_id,))
+            cursor.execute("DELETE FROM students WHERE id=?", (student_id,))
+            conn.commit()
+            st.success("Student deleted successfully!")
+            st.rerun()
+
+        # ----- CALL SELECT -----
+        call_option = st.selectbox(
+            "Select Call",
+            ["Call 1", "Call 2", "Call 3"]
+        )
+
+        # ----- FILE UPLOAD -----
+        uploaded_file = st.file_uploader(
+            f"Upload Recording for {call_option}"
+        )
+
+        # ----- UPLOAD BUTTON -----
+        if st.button(f"Upload {call_option}"):
+
+            if uploaded_file is not None:
+
+                # -------- READ AUDIO ONCE --------
+                audio_bytes = uploaded_file.read()
+                audio_hash = hashlib.md5(audio_bytes).hexdigest()
+
+                # -------- CHECK 1: SAME AUDIO --------
+                cursor.execute(
+                    "SELECT * FROM calls WHERE student_id=? AND audio_hash=?",
+                    (student_id, audio_hash)
+                )
+                existing_audio = cursor.fetchone()
+
+                # -------- CHECK 2: SAME CALL SLOT --------
+                cursor.execute(
+                    "SELECT * FROM calls WHERE student_id=? AND call_type=?",
+                    (student_id, call_option)
+                )
+                existing_call = cursor.fetchone()
+
+                # -------- HANDLE DUPLICATES --------
+                if existing_audio:
+                    st.warning("This call recording already exists!")
+
+                elif existing_call:
+                    st.warning(f"{call_option} already uploaded for this student!")
+
+                else:
+                    # ----- TRANSCRIPTION -----
+                    with st.spinner("Transcribing..."):
+                        whisper_model = load_whisper("base")
+
+                        transcript = transcribe_with_whisper(
+                            audio_bytes,
+                            whisper_model,
+                            uploaded_file.name
+                        )
+
+                    # ----- OPTIONAL GEMINI ENHANCEMENT -----
+                    if st.session_state.enhance_transcript and st.session_state.gemini_api_key:
+                        try:
+                            gen_model = genai.GenerativeModel("gemini-2.5-flash")
+
+                            prompt = f"""
+Improve this transcription. Fix grammar and clarity.
+
+Text:
+{transcript}
+
+Return only corrected text.
+"""
+                            response = gen_model.generate_content(prompt)
+
+                            if response and response.text:
+                                transcript = response.text.strip()
+
+                        except Exception as e:
+                            st.warning(f"Gemini enhancement failed: {e}")
+
+                    # ----- CALL OUTCOME -----
+                    with st.spinner("Analyzing call outcome..."):
+                        try:
+                            if not st.session_state.gemini_api_key:
+                                st.warning("Enter Gemini API key in sidebar")
+                                call_status = "No API Key"
+                            else:
+                                gen_model = genai.GenerativeModel("gemini-2.5-flash")
+
+                                prompt = f"""
+You are a strict classifier.
+
+Classify into ONLY one:
+
+- Interested
+- Not Interested
+- Not Reachable
+- Switched Off
+- Call Later
+
+No explanation.
+
+Transcript:
+{transcript}
+"""
+                                response = gen_model.generate_content(prompt)
+
+                                if response and response.text:
+                                    call_status = response.text.strip()
+                                else:
+                                    call_status = "Call Later"
+
+                        except Exception as e:
+                            st.error(f"Gemini error: {e}")
+                            call_status = "Error"
+
+                    # ----- SAVE TO DATABASE -----
+                    cursor.execute(
+                        "INSERT INTO calls (student_id, call_type, transcript, sentiment, date, audio_hash) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            student_id,
+                            call_option,
+                            transcript,
+                            call_status,
+                            datetime.now().strftime("%Y-%m-%d"),
+                            audio_hash
+                        )
+                    )
+                    conn.commit()
+
+                    st.success(f"{call_option} saved!")
+
+        # ----- PREVIOUS CALLS -----
+        st.subheader("Previous Calls")
+
+        cursor.execute(
+            "SELECT call_type, transcript, sentiment, date FROM calls WHERE student_id=?",
+            (student_id,)
+        )
+
+        call_data = cursor.fetchall()
+
+        if call_data:
+            df_calls = pd.DataFrame(
+                call_data,
+                columns=["Call", "Transcript", "Call Outcome", "Date"]
+            )
+            st.dataframe(df_calls, use_container_width=True)
+        else:
+            st.info("No calls yet")
+
+        # ----- OVERALL SUMMARY -----
+        if len(call_data) >= 3:
+
+            if st.button("Generate Overall Summary"):
+
+                with st.spinner("Generating AI Summary..."):
+                    try:
+                        if not st.session_state.gemini_api_key:
+                            st.warning("Enter Gemini API key in sidebar")
+                        else:
+                            gen_model = genai.GenerativeModel("gemini-2.5-flash")
+
+                            all_calls_text = "\n\n".join(
+                                [f"{c[0]}: {c[1]} | Outcome: {c[2]}" for c in call_data]
+                            )
+
+                            prompt = f"""
+Analyze these calls:
+
+- Student behavior
+- Interest level
+- Final suggestion
+
+Calls:
+{all_calls_text}
+"""
+                            response = gen_model.generate_content(prompt)
+
+                            st.subheader("Overall Summary")
+                            st.write(response.text)
+
+                    except Exception as e:
+                        st.error(f"Gemini error: {e}")
 # -------- CARD IMAGES (ADD HERE) --------
-audio_img = load_image_base64("audio_image.jpeg")
-text_img = load_image_base64("text_image.jpeg")
-crm_img = load_image_base64("crm_image.jpeg")
-csv_img = load_image_base64("full_image.jpeg")
+if st.session_state.page == "bulk":
+    if st.button("Back"):
+        st.session_state.page = "dashboard"
+        st.rerun()
 
-st.markdown("## Select Feedback Input Mode")
+    audio_img = load_image_base64("audio_image.jpeg")
+    text_img = load_image_base64("text_image.jpeg")
+    crm_img = load_image_base64("crm_image.jpeg")
+    csv_img = load_image_base64("full_image.jpeg")
 
-# ---------- INPUT MODE STATE ----------
-if "input_mode" not in st.session_state:
-    st.session_state.input_mode = ""
+    st.markdown("## Select Feedback Input Mode")
 
+    # ---------- INPUT MODE STATE ----------
+    if "input_mode" not in st.session_state:
+        st.session_state.input_mode = ""
 
-#cards
-c1, c2, c3, c4 = st.columns(4)
+    # cards
+    c1, c2, c3, c4 = st.columns(4)
 
-with c1:
-    st.image("audio_image.jpeg", width=180)
-    cls = "mode-btn-active" if st.session_state.input_mode == "Audio Feedback" else "mode-btn"
-    if st.button("Audio Feedback", key="audio"):
-        st.session_state.input_mode = "Audio Feedback"
-    
+    with c1:
+        st.image("audio_image.jpeg", width=180)
+        if st.button("Audio Feedback", key="audio"):
+            st.session_state.input_mode = "Audio Feedback"
 
-with c2:
-    st.image("text_image.jpeg", width=180)
-    cls = "mode-btn-active" if st.session_state.input_mode == "Text Feedback" else "mode-btn"
-    if st.button("Text Feedback", key="text"):
-        st.session_state.input_mode = "Text Feedback"
-    
+    with c2:
+        st.image("text_image.jpeg", width=180)
+        if st.button("Text Feedback", key="text"):
+            st.session_state.input_mode = "Text Feedback"
 
-with c3:
-    st.image("crm_image.jpeg", width=180)
-    cls = "mode-btn-active" if st.session_state.input_mode == "CRM Text Log" else "mode-btn"
-    if st.button("CRM Text Log", key="crm"):
-        st.session_state.input_mode = "CRM Text Log"
-    
+    with c3:
+        st.image("crm_image.jpeg", width=180)
+        if st.button("CRM Text Log", key="crm"):
+            st.session_state.input_mode = "CRM Text Log"
 
-with c4:
-    st.image("full_image.jpeg", width=180)
-    cls = "mode-btn-active" if st.session_state.input_mode == "Full CSV Analytics" else "mode-btn"
-    if st.button("Full CSV Analytics", key="csv"):
-        st.session_state.input_mode = "Full CSV Analytics"
-    
+    with c4:
+        st.image("full_image.jpeg", width=180)
+        if st.button("Full CSV Analytics", key="csv"):
+            st.session_state.input_mode = "Full CSV Analytics"
 
-
-#input_mode = st.session_state.input_mode
 
 # -----------------------------
 # 1) Upload Data (MODE-WISE)
@@ -219,57 +954,49 @@ audio_files = None
 csv_file = None
 crm_txt = None
 user_text = ""
+if st.session_state.page == "bulk":
+    if st.session_state.input_mode == "Audio Feedback":
+        st.subheader("Upload Call Recordings")
+        audio_files = st.file_uploader(
+            "Upload call recordings (any audio file)", accept_multiple_files=True
+        )
 
-#if input_mode == "Audio Feedback":
-if st.session_state.input_mode == "Audio Feedback":
-    st.subheader("Upload Call Recordings")
-    audio_files = st.file_uploader(
-        "Upload call recordings (any audio file)",
-        accept_multiple_files=True
-    )
+    elif st.session_state.input_mode == "Text Feedback":
+        st.subheader("Text Feedback Analysis")
+        user_text = st.text_area(
+            "Enter Student Feedback",
+            height=180,
+            placeholder="Example: I faced issues during admission counselling...",
+        )
 
-#elif input_mode == "Text Feedback":
-elif st.session_state.input_mode == "Text Feedback":
-    st.subheader("Text Feedback Analysis")
-    user_text = st.text_area(
-        "Enter Student Feedback",
-        height=180,
-        placeholder="Example: I faced issues during admission counselling..."
-    )
-# -----------------------------
-# Text Feedback Sentiment
-# -----------------------------
+    elif st.session_state.input_mode == "CRM Text Log":
+        st.subheader("CRM / Admission Log Analysis")
+        crm_txt = st.file_uploader("Upload CRM log (.txt file)", type=["txt"])
 
-#elif input_mode == "CRM Text Log":
-elif st.session_state.input_mode == "CRM Text Log":
-    st.subheader("CRM / Admission Log Analysis")
-    crm_txt = st.file_uploader(
-        "Upload CRM log (.txt file)",
-        type=["txt"]
-    )
+    elif st.session_state.input_mode == "Full CSV Analytics":
+        st.subheader("Upload CSV Logs")
+        csv_file = st.file_uploader(
+            "Upload CSV logs (student, year, course, remarks, etc.)", type=["csv"]
+        )
 
-
-
-#elif input_mode == "Full CSV Analytics":
-elif st.session_state.input_mode == "Full CSV Analytics":
-    st.subheader("Upload CSV Logs")
-    csv_file = st.file_uploader(
-        "Upload CSV logs (student, year, course, remarks, etc.)",
-        type=["csv"]
-    )
-    
 # -----------------------------
 # Sidebar Controls
 # -----------------------------
 st.sidebar.header("Settings")
-asr_engine = st.sidebar.selectbox("ASR Engine (Audio → Text)", ["Whisper", "Vosk (offline)"])
+asr_engine = st.sidebar.selectbox(
+    "ASR Engine (Audio → Text)", ["Whisper", "Vosk (offline)"]
+)
 if asr_engine == "Whisper":
-    whisper_size = st.sidebar.selectbox("Whisper model size", ["tiny", "base", "small", "medium"], index=1)
+    whisper_size = st.sidebar.selectbox(
+        "Whisper model size", ["tiny", "base", "small", "medium"], index=1
+    )
 else:
     vosk_model_dir = st.sidebar.text_input("Vosk model directory (unzipped)", value="")
 
 st.sidebar.markdown("---")
-use_pretrained = st.sidebar.checkbox("Force Pretrained Sentiment (skip training even if labels exist)", value=False)
+use_pretrained = st.sidebar.checkbox(
+    "Force Pretrained Sentiment (skip training even if labels exist)", value=False
+)
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Export**")
@@ -277,60 +1004,71 @@ save_intermediate = st.sidebar.checkbox("Save processed CSV", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.write("**Gemini Integration**")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password", placeholder="Enter your API key...")
-enhance_transcript = st.sidebar.checkbox("Enhance ASR Transcripts via Gemini", value=False)
-if gemini_api_key:
-    genai.configure(api_key=gemini_api_key)
+# -------- SESSION STATE FIX --------
+if "gemini_api_key" not in st.session_state:
+    st.session_state.gemini_api_key = ""
+
+if "enhance_transcript" not in st.session_state:
+    st.session_state.enhance_transcript = False
+
+# -------- SIDEBAR INPUT --------
+api_input = st.sidebar.text_input(
+    "Gemini API Key",
+    type="password",
+    placeholder="Enter your API key..."
+)
+
+if api_input:
+    st.session_state.gemini_api_key = api_input
+
+enhance_input = st.sidebar.checkbox(
+    "Enhance ASR Transcripts via Gemini",
+    value=st.session_state.enhance_transcript
+)
+
+st.session_state.enhance_transcript = enhance_input
+
+# -------- CONFIGURE GEMINI --------
+if st.session_state.gemini_api_key:
+    genai.configure(api_key=st.session_state.gemini_api_key)
+    
+
 
 # -----------------------------
 # Utilities
 # -----------------------------
-@st.cache_resource(show_spinner=False)
-def load_whisper(model_size: str):
-    if whisper is None:
-        raise RuntimeError("Whisper not installed. pip install openai-whisper and ensure ffmpeg is present.")
-    return whisper.load_model(model_size)
 
-@st.cache_resource(show_spinner=False)
-def load_vosk(model_dir: str):
-    if not model_dir or not os.path.isdir(model_dir):
-        raise RuntimeError("Valid Vosk model directory not provided.")
-    if VoskModel is None:
-        raise RuntimeError("Vosk not installed. pip install vosk")
-    return VoskModel(model_dir)
 
-@st.cache_resource(show_spinner=False)
-def load_hf_pipeline():
-    # Fast, widely used binary sentiment model
-    return pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english")
-@st.cache_resource(show_spinner=False)
-def load_zero_shot():
-    
-    return pipeline(
-        "zero-shot-classification",
-        model="facebook/bart-large-mnli"
+
+def train_sklearn_sentiment(texts: pd.Series, labels: pd.Series):
+    # labels expected as strings: positive/neutral/negative
+    y = (
+        labels.astype(str)
+        .str.lower()
+        .replace({
+            "pos": "positive",
+            "neg": "negative",
+            "neu": "neutral",
+            "n": "negative",
+            "p": "positive",
+        })
     )
 
-@st.cache_resource(show_spinner=False)
-def train_sklearn_sentiment(texts: pd.Series, labels: pd.Series):
-    # labels expected as strings: positive/neutral/negative (case-insensitive is handled)
-    y = labels.astype(str).str.lower().replace({
-        "pos": "positive",
-        "neg": "negative",
-        "neu": "neutral",
-        "n": "negative",
-        "p": "positive"
-    })
-    X_train, X_test, y_train, y_test = train_test_split(texts, y, test_size=0.2, random_state=42, stratify=y)
-    vectorizer = TfidfVectorizer(ngram_range=(1,2), min_df=2, max_features=50000)
+    X_train, X_test, y_train, y_test = train_test_split(
+        texts, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=50000)
     Xtr = vectorizer.fit_transform(X_train)
     Xte = vectorizer.transform(X_test)
+
     clf = LogisticRegression(max_iter=200)
     clf.fit(Xtr, y_train)
+
     y_pred = clf.predict(Xte)
     report = classification_report(y_test, y_pred, output_dict=False)
-    return vectorizer, clf, report
 
+    return vectorizer, clf, report
 
 def safe_parse_date(x):
     if pd.isna(x):
@@ -341,41 +1079,23 @@ def safe_parse_date(x):
         return None
 
 
-def transcribe_with_whisper(audio_bytes: bytes, model, filename: str) -> str:
-    if not audio_bytes:
-        return "[Empty audio]"
-
-    suffix = os.path.splitext(filename)[1]
-    if not suffix:
-        suffix = ".wav"
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
-
-    try:
-        result = model.transcribe(tmp_path)
-        text = result.get("text", "").strip()
-        return text if text else "[No speech detected]"
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
-
 def transcribe_with_vosk(audio_bytes: bytes, model, filename: str) -> str:
     # Vosk expects WAV PCM 16k mono. We'll try to coerce using wave if already wav; otherwise rely on ffmpeg via whisper isn't possible here.
     # For simplicity: if not WAV, we save and try to open. If not WAV PCM, we warn the user.
-    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1] or ".wav") as tmp:
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=os.path.splitext(filename)[1] or ".wav"
+    ) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
         path = tmp.name
     try:
-        if not path.lower().endswith('.wav'):
+        if not path.lower().endswith(".wav"):
             return "[Vosk] Please upload WAV PCM audio (16k mono) or use Whisper for auto-conversion."
         wf = wave.open(path, "rb")
         if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
-            return "[Vosk] WAV must be mono 16-bit PCM. Convert your file or use Whisper."
+            return (
+                "[Vosk] WAV must be mono 16-bit PCM. Convert your file or use Whisper."
+            )
         rec = KaldiRecognizer(model, wf.getframerate())
         rec.SetWords(True)
         text_pieces = []
@@ -398,6 +1118,7 @@ def transcribe_with_vosk(audio_bytes: bytes, model, filename: str) -> str:
         except Exception:
             pass
 
+
 # -----------------------------
 # Batch Sentiment Helper (CSV SPEED FIX)
 # -----------------------------
@@ -407,15 +1128,10 @@ def batch_sentiment_analysis(texts, batch_size=16):
     scores = []
 
     for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
+        batch = texts[i : i + batch_size]
 
         try:
-            results = nlp(
-                batch,
-                truncation=True,
-                padding=True,
-                max_length=256
-            )
+            results = nlp(batch, truncation=True, padding=True, max_length=256)
             for r in results:
                 sentiments.append(r["label"].lower())
                 scores.append(float(r["score"]))
@@ -425,6 +1141,8 @@ def batch_sentiment_analysis(texts, batch_size=16):
                 scores.append(0.0)
 
     return sentiments, scores
+
+
 # CRM Text Log Sentiment
 # -----------------------------
 if st.session_state.input_mode == "CRM Text Log" and crm_txt is not None:
@@ -443,17 +1161,14 @@ if st.session_state.input_mode == "CRM Text Log" and crm_txt is not None:
     st.info(f"Confidence Score: {score:.2f}")
 
     # Chart
-    chart_df = pd.DataFrame({
-        "Sentiment": [sentiment.capitalize()],
-        "Score": [score]
-    })
+    chart_df = pd.DataFrame({"Sentiment": [sentiment.capitalize()], "Score": [score]})
 
     fig = px.bar(
         chart_df,
         x="Sentiment",
         y="Score",
         range_y=[0, 1],
-        title="CRM Sentiment Confidence"
+        title="CRM Sentiment Confidence",
     )
 
     st.plotly_chart(fig, use_container_width=True, key="crm_sentiment_chart")
@@ -469,9 +1184,17 @@ if st.session_state.input_mode == "Text Feedback":
         text_lower = user_text.lower()
 
         complaint_keywords = [
-            "fee", "fees", "expensive", "cost", "pricing",
-            "not affordable", "too high", "overpriced",
-            "roi", "refund", "money"
+            "fee",
+            "fees",
+            "expensive",
+            "cost",
+            "pricing",
+            "not affordable",
+            "too high",
+            "overpriced",
+            "roi",
+            "refund",
+            "money",
         ]
 
         if any(word in text_lower for word in complaint_keywords):
@@ -488,29 +1211,31 @@ if st.session_state.input_mode == "Text Feedback":
             st.success(f"Sentiment: {sentiment.upper()}")
             st.info(f"Confidence Score: {score:.2f}")
 
-        chart_df = pd.DataFrame({
-            "Sentiment": [sentiment.capitalize()],
-            "Score": [score]
-        })
+        chart_df = pd.DataFrame(
+            {"Sentiment": [sentiment.capitalize()], "Score": [score]}
+        )
 
         fig = px.bar(
             chart_df,
             x="Sentiment",
             y="Score",
             range_y=[0, 1],
-            title="Text Feedback Sentiment Confidence"
+            title="Text Feedback Sentiment Confidence",
         )
 
-        st.plotly_chart(fig, use_container_width=True, key="text_feedback_sentiment_chart")
+        st.plotly_chart(
+            fig, use_container_width=True, key="text_feedback_sentiment_chart"
+        )
 
         st.subheader("Recommendations")
 
-        if gemini_api_key:
+        if st.session_state.gemini_api_key:
             with st.spinner("Generating AI Recommendation for this student..."):
                 try:
                     import time
-                    gen_model = genai.GenerativeModel('gemini-2.5-flash')
-                    prompt = f"A student provided this feedback which was analyzed as {sentiment.upper()}:\n\n\"{user_text}\"\n\nBased on this, what are 2-3 specific, actionable steps the college administration should take to address this specific feedback? Keep it brief and format as bullet points."
+
+                    gen_model = genai.GenerativeModel("gemini-2.5-flash")
+                    prompt = f'A student provided this feedback which was analyzed as {sentiment.upper()}:\n\n"{user_text}"\n\nBased on this, what are 2-3 specific, actionable steps the college administration should take to address this specific feedback? Keep it brief and format as bullet points.'
                     for attempt in range(3):
                         try:
                             response = gen_model.generate_content(prompt)
@@ -529,27 +1254,33 @@ if st.session_state.input_mode == "Text Feedback":
         else:
             if sentiment == "negative":
                 st.warning("Action Required")
-                st.markdown("""
+                st.markdown(
+                    """
                 - Contact the student immediately  
                 - Address fee / timing / service issues  
                 - Improve counselling clarity
-                """)
+                """
+                )
 
             elif sentiment == "positive":
                 st.success("Positive Feedback")
-                st.markdown("""
+                st.markdown(
+                    """
                 - Maintain service quality  
                 - Use this feedback as testimonial  
                 - Encourage referrals
-                """)
+                """
+                )
 
             else:
                 st.info("Neutral Feedback")
-                st.markdown("""
+                st.markdown(
+                    """
                 - Ask follow-up questions  
                 - Provide clearer information  
                 - Improve explanation
-                """)
+                """
+                )
 
     else:
         st.info("Please enter some text to analyze sentiment.")
@@ -585,7 +1316,8 @@ if st.session_state.input_mode == "Full CSV Analytics" and csv_file is not None:
 
     # -------- COMBINED TEXT (EXCLUDE transcript_text COMPLETELY) --------
     text_cols = [
-        col for col in df.select_dtypes(include="object").columns
+        col
+        for col in df.select_dtypes(include="object").columns
         if col != "transcript_text"
     ]
 
@@ -622,7 +1354,7 @@ if st.session_state.input_mode == "Full CSV Analytics" and csv_file is not None:
     st.dataframe(processed_df, use_container_width=True)
 
     merged = processed_df
-    
+
 if merged is not None and "transcript_text" in merged.columns:
     merged.drop(columns=["transcript_text"], inplace=True)
 
@@ -630,7 +1362,11 @@ if merged is not None and "transcript_text" in merged.columns:
 # Transcribe Audio
 # -----------------------------
 transcripts = []
-if audio_files and st.session_state.input_mode == "Audio Feedback" and st.session_state.input_mode!= "Full CSV Analytics":
+if (
+    audio_files
+    and st.session_state.input_mode == "Audio Feedback"
+    and st.session_state.input_mode != "Full CSV Analytics"
+):
     st.subheader("2) Transcribe Audio")
 
     if asr_engine == "Whisper":
@@ -638,16 +1374,18 @@ if audio_files and st.session_state.input_mode == "Audio Feedback" and st.sessio
 
     prog = st.progress(0)
 
-    for i, f in enumerate(audio_files):   # INSIDE
+    for i, f in enumerate(audio_files):  # INSIDE
         f.seek(0)
         audio_bytes = f.read()
         suffix = os.path.splitext(f.name)[1] or ".wav"
 
         if not audio_bytes:
-            transcripts.append({
-                "call_id": os.path.splitext(f.name)[0],
-                "transcript_text": "[Error: Empty audio data]"
-            })
+            transcripts.append(
+                {
+                    "call_id": os.path.splitext(f.name)[0],
+                    "transcript_text": "[Error: Empty audio data]",
+                }
+            )
             prog.progress(int(((i + 1) / len(audio_files)) * 100))
             continue
 
@@ -666,10 +1404,11 @@ if audio_files and st.session_state.input_mode == "Audio Feedback" and st.sessio
                 text = result.get("text", "").strip()
                 if not text:
                     text = "[No speech detected]"
-                elif enhance_transcript and gemini_api_key:
+                elif st.session_state.enhance_transcript and st.session_state.gemini_api_key:
                     try:
                         import time
-                        gen_model = genai.GenerativeModel('gemini-2.5-flash')
+
+                        gen_model = genai.GenerativeModel("gemini-2.5-flash")
                         prompt = f"Improve the sentence quality and fix any ASR transcription mistakes in the following text. Return ONLY the improved text:\n\n{text}"
                         for attempt in range(3):
                             try:
@@ -693,10 +1432,9 @@ if audio_files and st.session_state.input_mode == "Audio Feedback" and st.sessio
         finally:
             os.remove(tmp_path)
 
-        transcripts.append({
-            "call_id": os.path.splitext(f.name)[0],
-            "transcript_text": text
-        })
+        transcripts.append(
+            {"call_id": os.path.splitext(f.name)[0], "transcript_text": text}
+        )
 
         prog.progress(int(((i + 1) / len(audio_files)) * 100))
 
@@ -707,26 +1445,24 @@ else:
     df_tr = pd.DataFrame(columns=["call_id", "transcript_text"])  # empty
     # ALWAYS create merged for Audio Feedback (THIS RESTORES CHARTS)
 if st.session_state.input_mode == "Audio Feedback" and df is None:
-    merged = pd.DataFrame({
-        "call_id": df_tr["call_id"],
-        "student_name": None,
-        "year": None,
-        "tech_stack": None,
-        "location": None,
-        "remarks": "",
-        "date": None,
-        "label": None,
-        "date_parsed": None,
-        "transcript_text": df_tr["transcript_text"]
-    })
+    merged = pd.DataFrame(
+        {
+            "call_id": df_tr["call_id"],
+            "student_name": None,
+            "year": None,
+            "tech_stack": None,
+            "location": None,
+            "remarks": "",
+            "date": None,
+            "label": None,
+            "date_parsed": None,
+            "transcript_text": df_tr["transcript_text"],
+        }
+    )
 
     merged["combined_text"] = merged["transcript_text"].astype(str)
 
-if (
-    st.session_state.input_mode == "Audio Feedback"
-    and df is None
-    and not df_tr.empty
-):
+if st.session_state.input_mode == "Audio Feedback" and df is None and not df_tr.empty:
     st.subheader("Sentiment & Objection Analysis (Audio Only)")
     # Load models ONCE
     nlp = load_hf_pipeline()
@@ -743,7 +1479,7 @@ if (
         "Placement / Career",
         "Location / Travel",
         "Course Content",
-        "General Query"
+        "General Query",
     ]
 
     for txt in df_tr["transcript_text"].fillna(""):
@@ -778,60 +1514,65 @@ if (
 
     st.dataframe(merged, use_container_width=True)
 
-   
-
     # -----------------------------
 # Charts (FIXED – Audio Only)
 # -----------------------------
-if( st.session_state.input_mode == "Audio Feedback"
+if (
+    st.session_state.input_mode == "Audio Feedback"
     and merged is not None
     and not merged.empty
-    and "objection_type" in merged.columns):
+    and "objection_type" in merged.columns
+):
     st.subheader("Sentiment & Objection Charts")
 
     col1, col2 = st.columns(2)
 
     # PIE CHART – Sentiment
     with col1:
-        fig_sent = px.pie(
-            merged,
-            names="sentiment",
-            title="Sentiment Distribution"
-        )
+        fig_sent = px.pie(merged, names="sentiment", title="Sentiment Distribution")
         st.plotly_chart(fig_sent, use_container_width=True, key="audio_sentiment_pie")
 
     # BAR CHART – Objections
     with col2:
         if "objection_type" in merged.columns:
             fig_obj = px.bar(
-               merged,
-               x="objection_type",
-               title="Objection Type Distribution"
+                merged, x="objection_type", title="Objection Type Distribution"
             )
-            st.plotly_chart(fig_obj, use_container_width=True, key="audio_objection_bar")
+            st.plotly_chart(
+                fig_obj, use_container_width=True, key="audio_objection_bar"
+            )
         else:
             st.info("Objection analysis is available only for Audio Feedback mode.")
 
-    # Summary 
+    # Summary
     overall = merged["sentiment"].mode()[0]
     st.success(f"Overall Sentiment: {overall.upper()}")
     st.info(f"Average Confidence Score: {merged['confidence_score'].mean():.2f}")
 
-    
 
-#-------------------------------
+# -------------------------------
 # Sentiment: Train or Pretrained
 # -----------------------------
 
-if st.session_state.input_mode == "Full CSV Analytics" and merged is not None and not merged.empty:
+if (
+    st.session_state.input_mode == "Full CSV Analytics"
+    and merged is not None
+    and not merged.empty
+):
     st.subheader("4) Sentiment Analysis")
-    can_train = ("label" in merged.columns) and merged["label"].notna().any() and not use_pretrained
+    can_train = (
+        ("label" in merged.columns)
+        and merged["label"].notna().any()
+        and not use_pretrained
+    )
 
     if can_train:
         st.write("Training custom TF-IDF + LogisticRegression on provided labels…")
         with st.spinner("Training model…"):
             try:
-                vectorizer, clf, report = train_sklearn_sentiment(merged["combined_text"].fillna("") , merged["label"])
+                vectorizer, clf, report = train_sklearn_sentiment(
+                    merged["combined_text"].fillna(""), merged["label"]
+                )
                 st.text("Classification report (hold-out test):\n" + report)
                 # Predict using trained model
                 Xall = vectorizer.transform(merged["combined_text"].fillna(""))
@@ -878,11 +1619,21 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
         st.plotly_chart(fig, use_container_width=True, key="csv_sentiment_pie")
     with colB:
         if "location" in merged.columns:
-            fig2 = px.bar(merged.fillna({"location": "Unknown"}), x="location", color="sentiment", title="Sentiment by Location")
-            st.plotly_chart(fig2, use_container_width=True, key="csv_location_bar" )
+            fig2 = px.bar(
+                merged.fillna({"location": "Unknown"}),
+                x="location",
+                color="sentiment",
+                title="Sentiment by Location",
+            )
+            st.plotly_chart(fig2, use_container_width=True, key="csv_location_bar")
     with colC:
         if "tech_stack" in merged.columns:
-            fig3 = px.bar(merged.fillna({"tech_stack": "Unknown"}), x="tech_stack", color="sentiment", title="Sentiment by Tech Stack")
+            fig3 = px.bar(
+                merged.fillna({"tech_stack": "Unknown"}),
+                x="tech_stack",
+                color="sentiment",
+                title="Sentiment by Tech Stack",
+            )
             st.plotly_chart(fig3, use_container_width=True, key="csv_tech_stack_bar")
 
     # Time trend
@@ -890,7 +1641,14 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
         temp = merged.copy()
         temp["month"] = temp["date_parsed"].dt.to_period("M").astype(str)
         ts = temp.groupby(["month", "sentiment"]).size().reset_index(name="count")
-        fig4 = px.line(ts, x="month", y="count", color="sentiment", markers=True, title="Monthly Sentiment Trend")
+        fig4 = px.line(
+            ts,
+            x="month",
+            y="count",
+            color="sentiment",
+            markers=True,
+            title="Monthly Sentiment Trend",
+        )
         st.plotly_chart(fig4, use_container_width=True, key="csv_monthly_trend")
 
     # Top Negative Keywords (TF-IDF on negative rows)
@@ -902,8 +1660,14 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
         # Sum TF-IDF across docs
         sums = np.asarray(X.sum(axis=0)).ravel()
         vocab = np.array(vec.get_feature_names_out())
-        kw_df = pd.DataFrame({"keyword": vocab, "score": sums}).sort_values("score", ascending=False).head(20)
-        fig5 = px.bar(kw_df, x="keyword", y="score", title="Top Negative Keywords (TF-IDF)")
+        kw_df = (
+            pd.DataFrame({"keyword": vocab, "score": sums})
+            .sort_values("score", ascending=False)
+            .head(20)
+        )
+        fig5 = px.bar(
+            kw_df, x="keyword", y="score", title="Top Negative Keywords (TF-IDF)"
+        )
         st.plotly_chart(fig5, use_container_width=True, key="csv_negative_keywords")
     else:
         st.info("Not enough negative samples to extract keywords.")
@@ -911,7 +1675,12 @@ if st.session_state.input_mode == "Full CSV Analytics" and merged is not None an
 # -----------------------------
 # Recommendations (rule + keyword heuristics & Gemini AI)
 # -----------------------------
-if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and merged is not None and not merged.empty and "sentiment" in merged.columns:
+if (
+    st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"]
+    and merged is not None
+    and not merged.empty
+    and "sentiment" in merged.columns
+):
     if st.session_state.input_mode == "Full CSV Analytics":
         st.subheader("6) Recommendations")
     else:
@@ -920,28 +1689,40 @@ if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and m
     def get_ai_recommendations(df_: pd.DataFrame):
         try:
             total_records = len(df_)
-            sentiment_counts = df_['sentiment'].value_counts().to_dict()
-            
+            sentiment_counts = df_["sentiment"].value_counts().to_dict()
+
             summary_prompt = f"You are an expert consultant for a college. Analyze the following student feedback sentiment data and provide 3-5 highly actionable recommendations to improve the college's services, courses, and administration.\n\n"
             summary_prompt += f"Total Records: {total_records}\n"
             summary_prompt += f"Overall Sentiment Distribution: {sentiment_counts}\n"
-            
+
             if "location" in df_.columns:
                 loc_sent = df_.groupby("location")["sentiment"].value_counts().to_dict()
                 summary_prompt += f"Sentiment by Location: {loc_sent}\n"
-            
+
             if "tech_stack" in df_.columns:
-                tech_sent = df_.groupby("tech_stack")["sentiment"].value_counts().to_dict()
+                tech_sent = (
+                    df_.groupby("tech_stack")["sentiment"].value_counts().to_dict()
+                )
                 summary_prompt += f"Sentiment by Tech Stack: {tech_sent}\n"
-            
-            neg_text = " ".join(df_[df_["sentiment"] == "negative"]["combined_text"].dropna().astype(str).tolist())[:4000]
+
+            neg_text = " ".join(
+                df_[df_["sentiment"] == "negative"]["combined_text"]
+                .dropna()
+                .astype(str)
+                .tolist()
+            )[:4000]
             if neg_text:
-                summary_prompt += f"\nSample of negative feedback from students:\n{neg_text}\n"
-                
-            summary_prompt += "\nPlease format your response nicely with markdown bullet points."
-            
+                summary_prompt += (
+                    f"\nSample of negative feedback from students:\n{neg_text}\n"
+                )
+
+            summary_prompt += (
+                "\nPlease format your response nicely with markdown bullet points."
+            )
+
             import time
-            gen_model = genai.GenerativeModel('gemini-2.5-flash')
+
+            gen_model = genai.GenerativeModel("gemini-2.5-flash")
             for attempt in range(3):
                 try:
                     response = gen_model.generate_content(summary_prompt)
@@ -963,26 +1744,38 @@ if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and m
         # Overall negativity
         total = len(df_)
         negc = (df_["sentiment"] == "negative").sum()
-        if total > 0 and negc/total > 0.4:
-            recos.append("Overall negative sentiment is high (>40%). Consider immediate coaching for counselors and revising scripts.")
+        if total > 0 and negc / total > 0.4:
+            recos.append(
+                "Overall negative sentiment is high (>40%). Consider immediate coaching for counselors and revising scripts."
+            )
 
         # By location
         if "location" in df_.columns:
-            by_loc = df_.groupby("location")["sentiment"].apply(lambda s: (s=="negative").mean()).sort_values(ascending=False)
+            by_loc = (
+                df_.groupby("location")["sentiment"]
+                .apply(lambda s: (s == "negative").mean())
+                .sort_values(ascending=False)
+            )
             for loc, ratio in by_loc.items():
                 if pd.notna(loc) and ratio >= 0.35:
-                    recos.append(f"{loc}: Negative ratio {ratio:.0%}. Trial: reduce fees, add evening/weekend batches, or senior counselor callbacks.")
+                    recos.append(
+                        f"{loc}: Negative ratio {ratio:.0%}. Trial: reduce fees, add evening/weekend batches, or senior counselor callbacks."
+                    )
 
         # By stack
         if "tech_stack" in df_.columns:
-            by_stack = df_.groupby("tech_stack")["sentiment"].apply(lambda s: (s=="negative").mean()).sort_values(ascending=False)
+            by_stack = (
+                df_.groupby("tech_stack")["sentiment"]
+                .apply(lambda s: (s == "negative").mean())
+                .sort_values(ascending=False)
+            )
             for stack, ratio in by_stack.items():
                 if pd.notna(stack) and ratio >= 0.35:
                     tips = {
                         "python": "emphasize job outcomes with case studies, add mini capstone demo",
                         "java": "offer installment plans, highlight placement partners",
                         "mern": "show live project repos and alumni testimonials",
-                        "ai": "clarify math prerequisites and provide bridge modules"
+                        "ai": "clarify math prerequisites and provide bridge modules",
                     }
                     extra = ""
                     k = str(stack).lower()
@@ -990,23 +1783,45 @@ if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and m
                         if key in k:
                             extra = "; " + val
                             break
-                    recos.append(f"{stack}: Negative ratio {ratio:.0%}. Address objections via FAQs{extra}.")
+                    recos.append(
+                        f"{stack}: Negative ratio {ratio:.0%}. Address objections via FAQs{extra}."
+                    )
 
         # Keyword-based
-        text_all = " ".join(df_.get("combined_text", pd.Series(dtype=str)).dropna().astype(str).tolist()).lower()
+        text_all = " ".join(
+            df_.get("combined_text", pd.Series(dtype=str)).dropna().astype(str).tolist()
+        ).lower()
         if any(k in text_all for k in ["fee", "fees", "price", "cost", "expensive"]):
-            recos.append("Many fee-related objections → try scholarships, limited-time discounts, or EMI options.")
-        if any(k in text_all for k in ["time", "timing", "slot", "schedule", "evening", "weekend"]):
-            recos.append("Timing objections → add evening/weekend batches and flexible slots.")
-        if any(k in text_all for k in ["location", "distance", "noida", "lucknow", "commute"]):
-            recos.append("Location/commute issues → promote online/hybrid option and campus transfer flexibility.")
-        if any(k in text_all for k in ["doubt", "support", "mentor", "teacher", "faculty"]):
-            recos.append("Learning support concerns → advertise mentorship hours, doubt-solving sessions, and WhatsApp/Slack groups.")
+            recos.append(
+                "Many fee-related objections → try scholarships, limited-time discounts, or EMI options."
+            )
+        if any(
+            k in text_all
+            for k in ["time", "timing", "slot", "schedule", "evening", "weekend"]
+        ):
+            recos.append(
+                "Timing objections → add evening/weekend batches and flexible slots."
+            )
+        if any(
+            k in text_all
+            for k in ["location", "distance", "noida", "lucknow", "commute"]
+        ):
+            recos.append(
+                "Location/commute issues → promote online/hybrid option and campus transfer flexibility."
+            )
+        if any(
+            k in text_all for k in ["doubt", "support", "mentor", "teacher", "faculty"]
+        ):
+            recos.append(
+                "Learning support concerns → advertise mentorship hours, doubt-solving sessions, and WhatsApp/Slack groups."
+            )
         if any(k in text_all for k in ["job", "placement", "interview", "resume"]):
-            recos.append("Career outcomes focus → showcase placement stats, resume/interview prep workshops.")
+            recos.append(
+                "Career outcomes focus → showcase placement stats, resume/interview prep workshops."
+            )
         return recos
 
-    if gemini_api_key:
+    if st.session_state.gemini_api_key:
         with st.spinner("Generating AI Recommendations using Gemini..."):
             ai_recos = get_ai_recommendations(merged)
             if ai_recos:
@@ -1018,7 +1833,9 @@ if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and m
                     for r in recommendations:
                         st.markdown(f"- {r}")
                 else:
-                    st.info("No strong recommendations detected. With more data, insights will improve.")
+                    st.info(
+                        "No strong recommendations detected. With more data, insights will improve."
+                    )
     else:
         # Use rule-based recommendations
         recommendations = gen_recos(merged)
@@ -1026,7 +1843,9 @@ if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and m
             for r in recommendations:
                 st.markdown(f"- {r}")
         else:
-            st.info("No strong recommendations detected. With more data, insights will improve.")
+            st.info(
+                "No strong recommendations detected. With more data, insights will improve."
+            )
 
     # -----------------------------
     # Downloads
@@ -1039,9 +1858,14 @@ if st.session_state.input_mode in ["Full CSV Analytics", "Audio Feedback"] and m
         out_csv = merged.copy()
         out_buf = io.StringIO()
         out_csv.to_csv(out_buf, index=False)
-        st.download_button("Download processed CSV", data=out_buf.getvalue(), file_name=f"softpro_processed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv")
+        st.download_button(
+            "Download processed CSV",
+            data=out_buf.getvalue(),
+            file_name=f"softpro_processed_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+        )
 
-#else:
-    #st.info("Upload at least a CSV or audio to proceed.")
+# else:
+# st.info("Upload at least a CSV or audio to proceed.")
 
 # End of app
