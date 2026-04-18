@@ -26,6 +26,7 @@
 import os
 import io
 import tempfile
+import hashlib
 from datetime import datetime
 from dateutil import parser
 
@@ -69,11 +70,14 @@ import google.generativeai as genai
 
 
 # set the Enviroment Variable :-
-os.environ["PATH"] += (
-    os.pathsep
-    + r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
-)
+#os.environ["PATH"] += (
+  #  os.pathsep
+ #   + r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
+#)
+ffmpeg_path = r"D:\Training\spi\Python-with-Datascience\my-softpro-project\softpro-Analytics\ffmpeg\bin"
 
+if ffmpeg_path not in os.environ["PATH"]:
+    os.environ["PATH"] += os.pathsep + ffmpeg_path
 
 # Optional imports are wrapped – they may fail gracefully if not installed
 try:
@@ -153,17 +157,21 @@ import sqlite3
 
 conn = sqlite3.connect("project.db")
 cursor = conn.cursor()
+
+# -------- USERS TABLE --------
 cursor.execute(
     """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT,
     password TEXT,
-    role TEXT
+    role TEXT,
+    manager_id INTEGER
 )
 """
 )
 
+# -------- STUDENTS TABLE --------
 cursor.execute(
     """
 CREATE TABLE IF NOT EXISTS students (
@@ -176,6 +184,7 @@ CREATE TABLE IF NOT EXISTS students (
 """
 )
 
+# -------- CALLS TABLE --------
 cursor.execute(
     """
 CREATE TABLE IF NOT EXISTS calls (
@@ -184,29 +193,46 @@ CREATE TABLE IF NOT EXISTS calls (
     call_type TEXT,
     transcript TEXT,
     sentiment TEXT,
-    date TEXT
+    date TEXT,
+    audio_hash TEXT
 )
 """
 )
 
 conn.commit()
+
+# -------- HANDLE OLD DATABASE (ADD COLUMN IF NOT EXISTS) --------
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN manager_id INTEGER")
+    conn.commit()
+except:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE calls ADD COLUMN audio_hash TEXT")
+    conn.commit()
+except:
+    pass
+
+# -------- DEFAULT USERS (ONLY IF EMPTY) --------
 cursor.execute("SELECT * FROM users")
 users = cursor.fetchall()
 
 if len(users) == 0:
     cursor.execute(
-        "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-        ("counsellor1", "123", "counsellor"),
+        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+        ("counsellor1", "123", "counsellor", None),
     )
     cursor.execute(
-        "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-        ("manager1", "123", "manager"),
+        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+        ("manager1", "123", "manager", None),
     )
     cursor.execute(
-        "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-        ("owner1", "123", "owner"),
+        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+        ("owner1", "123", "owner", None),
     )
     conn.commit()
+
 # ===== DATABASE SETUP END =====
 
 # -----------------------------
@@ -275,8 +301,13 @@ if st.session_state.page == "login":
 
         if user:
             st.success("Login successful")
+            import time
+            time.sleep(1.5)
             st.session_state.page = "dashboard"
             st.session_state.role = user[3]  # role
+            st.session_state.user_id = user[0]
+            
+            st.rerun()
         else:
             st.error("Invalid username or password")
 
@@ -341,26 +372,41 @@ button[kind="primary"]:hover {
 # APP HEADER
 # -----------------------------
 import base64
+#  GLOBAL LOGOUT (ADD HERE)
+if st.session_state.get("page") != "login":
+
+    col1, col2 = st.columns([0.85, 0.15])
+
+    with col2:
+        if st.button(" Logout", key="global_logout"):
+            st.session_state.clear()
+            st.session_state.page = "login"
+            st.rerun()
 
 # ===== DASHBOARD =====
 if st.session_state.page == "dashboard":
 
+   
+
     role = st.session_state.role
 
-    # ================= COUNSELLOR =================
+
+    # =========================================================
+    # ================= COUNSELLOR PANEL =======================
+    # =========================================================
     if role == "counsellor":
 
         st.title("Counsellor Panel")
 
-        st.subheader("Select Working Mode")
-
-        if st.button("Bulk Analysis"):
+        if st.button("Bulk Analysis", key="c_bulk"):
             st.session_state.page = "bulk"
 
-        if st.button("Individual Analysis"):
+        if st.button("Individual Analysis", key="c_individual"):
             st.session_state.page = "individual"
 
-    # ================= MANAGER =================
+    # =========================================================
+    # ================= MANAGER PANEL =========================
+    # =========================================================
     elif role == "manager":
 
         st.title("Manager Panel")
@@ -371,194 +417,114 @@ if st.session_state.page == "dashboard":
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            if st.button("Add New Counsellor"):
+            if st.button("Add Counsellor", key="m_add"):
                 st.session_state.active_section = "add"
 
         with col2:
-            if st.button("All Counsellors"):
+            if st.button("All Counsellors", key="m_list"):
                 st.session_state.active_section = "list"
 
         with col3:
-            if st.button("Counsellor Performance"):
+            if st.button("Counsellor Performance", key="m_perf"):
                 st.session_state.active_section = "perf"
 
         with col4:
-            if st.button("Counsellor Ranking"):
+            if st.button("Counsellor Ranking", key="m_rank"):
                 st.session_state.active_section = "rank"
 
         st.markdown("---")
 
-        # -------- ADD --------
+        # -------- ADD COUNSELLOR --------
         if st.session_state.active_section == "add":
 
-            st.subheader("Add New Counsellor")
+            new_username = st.text_input("Username", key="m_user")
+            new_password = st.text_input("Password", type="password", key="m_pass")
 
-            new_username = st.text_input("Username", key="add_user")
-            new_password = st.text_input("Password", type="password", key="add_pass")
+            if st.button("Add Counsellor", key="m_add_submit"):
 
-            if st.button("Add Counsellor"):
-
-                if new_username.strip() == "" or new_password.strip() == "":
-                    st.error("Enter details")
+                cursor.execute("SELECT * FROM users WHERE username=?", (new_username,))
+                if cursor.fetchone():
+                    st.warning("Username exists")
                 else:
                     cursor.execute(
-                        "SELECT * FROM users WHERE username=?",
-                        (new_username,)
+                        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+                        (new_username, new_password, "counsellor", st.session_state.user_id)
                     )
-                    if cursor.fetchone():
-                        st.warning("Username exists")
-                    else:
-                        cursor.execute(
-                            "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-                            (new_username, new_password, "counsellor")
-                        )
-                        conn.commit()
-
-                        st.success("Counsellor added!")
-
-                        st.session_state.add_user = ""
-                        st.session_state.add_pass = ""
-                        st.session_state.active_section = ""
-                        st.rerun()
+                    conn.commit()
+                    st.success("Added!")
+                    st.rerun()
 
         # -------- LIST --------
         elif st.session_state.active_section == "list":
 
-            st.subheader("All Counsellors")
-
-            cursor.execute("SELECT id, username, password FROM users WHERE role='counsellor'")
+            cursor.execute(
+                "SELECT id, username FROM users WHERE role='counsellor' AND manager_id=?",
+                (st.session_state.user_id,)
+            )
             counsellors = cursor.fetchall()
 
-            if not counsellors:
-                st.info("No counsellors found")
-
             for c in counsellors:
-                col1, col2, col3 = st.columns([4, 1, 1])
+                col1, col2, col3 = st.columns([4,1,1])
 
                 with col1:
                     st.write("👤", c[1])
 
                 with col2:
-                    if st.button("Edit", key=f"edit_{c[0]}"):
+                    if st.button("Edit", key=f"m_edit_{c[0]}"):
                         st.session_state.edit_id = c[0]
 
                 with col3:
-                    if st.button("Delete", key=f"del_{c[0]}"):
-
-                        cursor.execute(
-                            "DELETE FROM calls WHERE student_id IN (SELECT id FROM students WHERE counsellor_id=?)",
-                            (c[0],)
-                        )
-                        cursor.execute(
-                            "DELETE FROM students WHERE counsellor_id=?",
-                            (c[0],)
-                        )
-                        cursor.execute(
-                            "DELETE FROM users WHERE id=?",
-                            (c[0],)
-                        )
-
+                    if st.button("Delete", key=f"m_del_{c[0]}"):
+                        cursor.execute("DELETE FROM users WHERE id=?", (c[0],))
                         conn.commit()
-                        st.success("Deleted!")
                         st.rerun()
-
-        # -------- EDIT --------
-        if "edit_id" in st.session_state:
-
-            st.subheader("Edit Counsellor")
-
-            edit_id = st.session_state.edit_id
-
-            cursor.execute("SELECT username, password FROM users WHERE id=?", (edit_id,))
-            data = cursor.fetchone()
-
-            new_username = st.text_input("New Username", value=data[0])
-            new_password = st.text_input("New Password", value=data[1])
-
-            if st.button("Update"):
-
-                cursor.execute(
-                    "UPDATE users SET username=?, password=? WHERE id=?",
-                    (new_username, new_password, edit_id)
-                )
-                conn.commit()
-
-                st.success("Updated!")
-                del st.session_state.edit_id
-                st.rerun()
 
         # -------- PERFORMANCE --------
         elif st.session_state.active_section == "perf":
 
-            st.subheader("Counsellor Performance")
-
             cursor.execute("""
                 SELECT users.username, COUNT(calls.id)
                 FROM users
                 LEFT JOIN students ON students.counsellor_id = users.id
                 LEFT JOIN calls ON calls.student_id = students.id
-                WHERE users.role = 'counsellor'
+                WHERE users.role='counsellor' AND users.manager_id=?
                 GROUP BY users.username
-            """)
+            """, (st.session_state.user_id,))
 
             data = cursor.fetchall()
 
-            if not data:
-                st.info("No data available")
-            else:
-                import pandas as pd
-                import plotly.express as px
-
-                df_perf = pd.DataFrame(data, columns=["Counsellor", "Calls"])
-
-                st.plotly_chart(px.bar(df_perf, x="Counsellor", y="Calls", title="Performance"), use_container_width=True)
-                st.plotly_chart(px.pie(df_perf, names="Counsellor", values="Calls", title="Distribution"), use_container_width=True)
+            if data:
+                df = pd.DataFrame(data, columns=["Counsellor", "Calls"])
+                st.bar_chart(df.set_index("Counsellor"))
 
         # -------- RANKING --------
         elif st.session_state.active_section == "rank":
 
-            st.subheader("Counsellor Ranking")
-
             cursor.execute("""
-                SELECT users.username, COUNT(calls.id)
+                SELECT users.username, COUNT(calls.id) as total_calls
                 FROM users
                 LEFT JOIN students ON students.counsellor_id = users.id
                 LEFT JOIN calls ON calls.student_id = students.id
-                WHERE users.role = 'counsellor'
+                WHERE users.role='counsellor' AND users.manager_id=?
                 GROUP BY users.username
-            """)
+                ORDER BY total_calls DESC
+            """, (st.session_state.user_id,))
 
             data = cursor.fetchall()
 
-            if not data:
-                st.warning("No ranking data yet")
-            else:
-                import pandas as pd
-                import plotly.express as px
+            if data:
+                df = pd.DataFrame(data, columns=["Counsellor", "Calls"])
+                df["Rank"] = df["Calls"].rank(method="dense", ascending=False).astype(int)
+                st.dataframe(df)
 
-                sorted_data = sorted(data, key=lambda x: x[1], reverse=True)
-                df_rank = pd.DataFrame(sorted_data, columns=["Counsellor", "Calls"])
-
-                st.plotly_chart(px.bar(df_rank, x="Counsellor", y="Calls", title="Ranking"), use_container_width=True)
-
-        # -------- BACK --------
-        if st.button("⬅ Back"):
-            if st.session_state.active_section != "":
-                st.session_state.active_section = ""
-            else:
-                st.session_state.page = "login"
-            st.rerun()
-
-    # ================= OWNER =================
+    # =========================================================
+    # ================= OWNER PANEL (FIXED) ====================
+    # =========================================================
     elif role == "owner":
 
         st.title("Owner Dashboard")
 
-        import pandas as pd
-        import plotly.express as px
-        import io
-
-        # -------- COUNTS --------
+        # ===== COUNTS =====
         cursor.execute("SELECT COUNT(*) FROM users WHERE role='counsellor'")
         total_counsellors = cursor.fetchone()[0]
 
@@ -568,111 +534,135 @@ if st.session_state.page == "dashboard":
         cursor.execute("SELECT COUNT(*) FROM calls")
         total_calls = cursor.fetchone()[0]
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Counsellors", total_counsellors)
-        col2.metric("Total Students", total_students)
-        col3.metric("Total Calls", total_calls)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Counsellors", total_counsellors)
+        c2.metric("Total Students", total_students)
+        c3.metric("Total Calls", total_calls)
 
         st.markdown("---")
 
-        # -------- FETCH DATA --------
-        cursor.execute("""
-            SELECT 
-                students.name,
-                users.username,
-                calls.call_type,
-                calls.sentiment,
-                calls.date
-            FROM calls
-            LEFT JOIN students ON calls.student_id = students.id
-            LEFT JOIN users ON students.counsellor_id = users.id
-        """)
+        if "owner_section" not in st.session_state:
+            st.session_state.owner_section = ""
 
-        call_data = cursor.fetchall()
+        col1, col2, col3 = st.columns(3)
 
-        if call_data:
+        with col1:
+            if st.button("Add Manager", key="o_manager"):
+                st.session_state.owner_section = "manager"
 
-            df_calls = pd.DataFrame(
-                call_data,
-                columns=["Student", "Counsellor", "Call Type", "Sentiment", "Date"]
-            )
+        with col2:
+            if st.button("Counsellor", key="o_counsellor"):
+                st.session_state.owner_section = "counsellor"
 
-            # -------- FILTERS --------
-            st.subheader("Filters")
+        with col3:
+            if st.button("Student Analytics", key="o_student"):
+                st.session_state.owner_section = "student"
 
-            col1, col2 = st.columns(2)
+        st.markdown("---")
 
-            with col1:
-                counsellor_filter = st.selectbox(
-                    "Filter by Counsellor",
-                    ["All"] + sorted(df_calls["Counsellor"].dropna().unique().tolist())
-                )
+        # -------- ADD MANAGER --------
+        if st.session_state.owner_section == "manager":
 
-            with col2:
-                sentiment_filter = st.selectbox(
-                    "Filter by Sentiment",
-                    ["All"] + sorted(df_calls["Sentiment"].dropna().unique().tolist())
-                )
+            user = st.text_input("Username", key="o_user")
+            pwd = st.text_input("Password", type="password", key="o_pass")
 
-            # -------- DATE FILTER (DYNAMIC BEST) --------
-            df_calls["Date"] = pd.to_datetime(df_calls["Date"], errors="coerce")
+            if st.button("Add Manager", key="o_add_submit"):
 
-            col3, col4 = st.columns(2)
+                cursor.execute("SELECT * FROM users WHERE username=?", (user,))
+                if cursor.fetchone():
+                    st.warning("Exists")
+                else:
+                    cursor.execute(
+                        "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+                        (user, pwd, "manager", None)
+                    )
+                    conn.commit()
+                    st.success("Added")
+                    st.rerun()
 
-            with col3:
-                start_date = st.date_input("Start Date", value=df_calls["Date"].min())
+        # -------- COUNSELLOR --------
+        elif st.session_state.owner_section == "counsellor":
 
-            with col4:
-                end_date = st.date_input("End Date", value=df_calls["Date"].max())
+            if "owner_tab" not in st.session_state:
+                st.session_state.owner_tab = "list"
 
-            # -------- APPLY FILTERS --------
-            filtered_df = df_calls.copy()
+            tab1, tab2 = st.tabs(["List", "Performance"])
 
-            if counsellor_filter != "All":
-                filtered_df = filtered_df[filtered_df["Counsellor"] == counsellor_filter]
+            with tab1:
+                st.session_state.owner_tab = "list"
 
-            if sentiment_filter != "All":
-                filtered_df = filtered_df[filtered_df["Sentiment"] == sentiment_filter]
+                cursor.execute("SELECT id, username FROM users WHERE role='counsellor'")
+                data = cursor.fetchall()
 
-            if start_date:
-                filtered_df = filtered_df[filtered_df["Date"] >= pd.to_datetime(start_date)]
+                st.write("Total:", len(data))
 
-            if end_date:
-                filtered_df = filtered_df[filtered_df["Date"] <= pd.to_datetime(end_date)]
+                for c in data:
+                    col1, col2, col3 = st.columns([4,1,1])
+                    col1.write(c[1])
 
-            st.markdown("---")
+                    if col2.button("Edit", key=f"o_edit_{c[0]}"):
+                        st.session_state.edit_id = c[0]
 
-            # -------- TABLE --------
-            st.subheader("Student Call Details")
-            st.dataframe(filtered_df, use_container_width=True)
+                    if col3.button("Delete", key=f"o_del_{c[0]}"):
+                        cursor.execute("DELETE FROM users WHERE id=?", (c[0],))
+                        conn.commit()
+                        st.rerun()
 
-            # -------- SENTIMENT CHART --------
-            st.subheader("Sentiment Distribution")
+            with tab2:
+                st.session_state.owner_tab = "perf"
 
-            sentiment_counts = filtered_df["Sentiment"].value_counts()
+                with tab2:
+                    st.session_state.owner_tab = "perf"
 
-            if not sentiment_counts.empty:
-                st.plotly_chart(
-                    px.pie(names=sentiment_counts.index, values=sentiment_counts.values),
-                    use_container_width=True
-                )
-            else:
-                st.info("No data for selected filters")
+                    cursor.execute("""
+                        SELECT 
+                            m.username AS manager,
+                            c.username AS counsellor,
+                            COUNT(calls.id) AS total_calls
+                        FROM users c
+                        LEFT JOIN users m ON c.manager_id = m.id
+                        LEFT JOIN students ON students.counsellor_id = c.id
+                        LEFT JOIN calls ON calls.student_id = students.id
+                        WHERE c.role = 'counsellor'
+                        GROUP BY m.username, c.username
+                        ORDER BY m.username
+                    """)
 
-            # -------- DOWNLOAD --------
-            csv_buffer = io.StringIO()
-            filtered_df["Date"] = filtered_df["Date"].dt.strftime("%d-%m-%Y")
-            filtered_df.to_csv(csv_buffer, index=False)
+                    data = cursor.fetchall()
 
-            st.download_button(
-                "Download Filtered Report",
-                data=csv_buffer.getvalue(),
-                file_name="filtered_report.csv",
-                mime="text/csv"
-            )
+                    if data:
+                        df = pd.DataFrame(data, columns=["Manager", "Counsellor", "Calls"])
 
-        else:
-            st.info("No data available")
+                        st.subheader("Manager → Counsellor Performance")
+
+                        st.dataframe(df)
+
+                        import plotly.express as px
+
+                        fig = px.bar(
+                            df,
+                            x="Counsellor",
+                            y="Calls",
+                            color="Manager",
+                            title="Counsellor Performance Under Each Manager"
+                        )
+
+                        st.plotly_chart(fig, use_container_width=True)
+        # -------- STUDENT ANALYTICS --------
+        elif st.session_state.owner_section == "student":
+
+            cursor.execute("""
+                SELECT students.name, users.username, calls.sentiment
+                FROM calls
+                LEFT JOIN students ON calls.student_id = students.id
+                LEFT JOIN users ON students.counsellor_id = users.id
+            """)
+            data = cursor.fetchall()
+
+            if data:
+                df = pd.DataFrame(data, columns=["Student", "Counsellor", "Sentiment"])
+                st.dataframe(df)
+
 # ===== INDIVIDUAL ANALYSIS UI =====
 if st.session_state.page == "individual":
 
@@ -699,15 +689,16 @@ if st.session_state.page == "individual":
         name = st.text_input("Student Name")
         mobile = st.text_input("Mobile Number")
         location = st.text_input("Location")
-
+        
         if st.button("Save Student"):
+            
 
             if name.strip() == "":
                 st.error("Name required")
             else:
                 cursor.execute(
                     "INSERT INTO students (name, mobile, location, counsellor_id) VALUES (?, ?, ?, ?)",
-                    (name, mobile, location, 1)
+                    (name, mobile, location, st.session_state.user_id)
                 )
                 conn.commit()
                 st.success("Student Saved!")
@@ -717,28 +708,6 @@ if st.session_state.page == "individual":
     else:
 
         st.subheader(f"Student: {selected_student}")
-        student_id = None
-        for s in students:
-            if s[1] == selected_student:
-                student_id = s[0]
-        if student_id is None:
-            st.error("Student id is not found")
-            st.stop()
-        st.write("Student ID:", student_id)
-        if st.button("Delete Student"):
-           student_id = int(student_id)
-        
-            #delete calls first
-           cursor.execute("DELETE FROM calls WHERE student_id=?",(student_id,)
-            )
-           #delete student also
-           cursor.execute("DELETE FROM students WHERE id=?",(student_id,)
-            )
-           conn.commit()
-           st.success("Student deleted successfully!")
-           st.rerun()
-
-
 
         # ----- GET STUDENT ID -----
         student_id = None
@@ -749,6 +718,16 @@ if st.session_state.page == "individual":
         if student_id is None:
             st.error("Student ID not found")
             st.stop()
+
+        st.write("Student ID:", student_id)
+
+        # ----- DELETE STUDENT -----
+        if st.button("Delete Student"):
+            cursor.execute("DELETE FROM calls WHERE student_id=?", (student_id,))
+            cursor.execute("DELETE FROM students WHERE id=?", (student_id,))
+            conn.commit()
+            st.success("Student deleted successfully!")
+            st.rerun()
 
         # ----- CALL SELECT -----
         call_option = st.selectbox(
@@ -766,25 +745,48 @@ if st.session_state.page == "individual":
 
             if uploaded_file is not None:
 
-                # ----- TRANSCRIPTION -----
-                with st.spinner("Transcribing..."):
-                    audio_bytes = uploaded_file.read()
-                    whisper_model = load_whisper("base")
+                # -------- READ AUDIO ONCE --------
+                audio_bytes = uploaded_file.read()
+                audio_hash = hashlib.md5(audio_bytes).hexdigest()
 
-                    transcript = transcribe_with_whisper(
-                        audio_bytes,
-                        whisper_model,
-                        uploaded_file.name
-                    )
+                # -------- CHECK 1: SAME AUDIO --------
+                cursor.execute(
+                    "SELECT * FROM calls WHERE student_id=? AND audio_hash=?",
+                    (student_id, audio_hash)
+                )
+                existing_audio = cursor.fetchone()
 
-                # ----- GEMINI TRANSCRIPT FIX -----
-                if st.session_state.enhance_transcript and st.session_state.gemini_api_key:
-                    try:
-                        
+                # -------- CHECK 2: SAME CALL SLOT --------
+                cursor.execute(
+                    "SELECT * FROM calls WHERE student_id=? AND call_type=?",
+                    (student_id, call_option)
+                )
+                existing_call = cursor.fetchone()
 
-                        gen_model = genai.GenerativeModel("gemini-2.5-flash")
+                # -------- HANDLE DUPLICATES --------
+                if existing_audio:
+                    st.warning("This call recording already exists!")
 
-                        prompt = f"""
+                elif existing_call:
+                    st.warning(f"{call_option} already uploaded for this student!")
+
+                else:
+                    # ----- TRANSCRIPTION -----
+                    with st.spinner("Transcribing..."):
+                        whisper_model = load_whisper("base")
+
+                        transcript = transcribe_with_whisper(
+                            audio_bytes,
+                            whisper_model,
+                            uploaded_file.name
+                        )
+
+                    # ----- OPTIONAL GEMINI ENHANCEMENT -----
+                    if st.session_state.enhance_transcript and st.session_state.gemini_api_key:
+                        try:
+                            gen_model = genai.GenerativeModel("gemini-2.5-flash")
+
+                            prompt = f"""
 Improve this transcription. Fix grammar and clarity.
 
 Text:
@@ -792,32 +794,24 @@ Text:
 
 Return only corrected text.
 """
+                            response = gen_model.generate_content(prompt)
 
-                        response = gen_model.generate_content(prompt)
+                            if response and response.text:
+                                transcript = response.text.strip()
 
-                        if response and response.text:
-                            transcript = response.text.strip()
+                        except Exception as e:
+                            st.warning(f"Gemini enhancement failed: {e}")
 
-                    except Exception as e:
-                        st.warning(f"Gemini enhancement failed: {e}")
+                    # ----- CALL OUTCOME -----
+                    with st.spinner("Analyzing call outcome..."):
+                        try:
+                            if not st.session_state.gemini_api_key:
+                                st.warning("Enter Gemini API key in sidebar")
+                                call_status = "No API Key"
+                            else:
+                                gen_model = genai.GenerativeModel("gemini-2.5-flash")
 
-                # ----- SHOW TRANSCRIPT -----
-                st.subheader("Transcript")
-                st.write(transcript)
-
-                # ----- GEMINI CALL OUTCOME -----
-                with st.spinner("Analyzing call outcome..."):
-                    try:
-                        if not st.session_state.gemini_api_key:
-                            st.warning("Enter Gemini API key in sidebar")
-                            call_status = "No API Key"
-
-                        else:
-                            
-
-                            gen_model = genai.GenerativeModel("gemini-2.5-flash")
-
-                            prompt = f"""
+                                prompt = f"""
 You are a strict classifier.
 
 Classify into ONLY one:
@@ -833,44 +827,29 @@ No explanation.
 Transcript:
 {transcript}
 """
+                                response = gen_model.generate_content(prompt)
 
-                            response = gen_model.generate_content(prompt)
+                                if response and response.text:
+                                    call_status = response.text.strip()
+                                else:
+                                    call_status = "Call Later"
 
-                            if response and response.text:
-                                call_status = response.text.strip()
-                            else:
-                                call_status = "Call Later"
+                        except Exception as e:
+                            st.error(f"Gemini error: {e}")
+                            call_status = "Error"
 
-                    except Exception as e:
-                        st.error(f"Gemini error: {e}")
-                        call_status = "Error"
-
-                # ----- SHOW RESULT -----
-                st.subheader("Call Outcome")
-                st.success(call_status)
-
-                # ----- SAVE TO DB -----
-                # ---- CHECK DUPLICATE ----
-                cursor.execute(
-                    "SELECT * FROM calls WHERE student_id=? AND sentiment=?",
-                    (student_id, call_status)
-                )
-
-                existing = cursor.fetchone()
-
-                if existing:
-                    st.warning("This call already exists!")
-                else:
+                    # ----- SAVE TO DATABASE -----
                     cursor.execute(
-                      "INSERT INTO calls (student_id, call_type, transcript, sentiment, date) VALUES (?, ?, ?, ?, ?)",
-                            (
-                                student_id,
-                                call_option,
-                                transcript,
-                                call_status,
-                                datetime.now().strftime("%Y-%m-%d")
-                            )
+                        "INSERT INTO calls (student_id, call_type, transcript, sentiment, date, audio_hash) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            student_id,
+                            call_option,
+                            transcript,
+                            call_status,
+                            datetime.now().strftime("%Y-%m-%d"),
+                            audio_hash
                         )
+                    )
                     conn.commit()
 
                     st.success(f"{call_option} saved!")
@@ -879,7 +858,7 @@ Transcript:
         st.subheader("Previous Calls")
 
         cursor.execute(
-            "SELECT transcript, sentiment, date FROM calls WHERE student_id=?",
+            "SELECT call_type, transcript, sentiment, date FROM calls WHERE student_id=?",
             (student_id,)
         )
 
@@ -888,9 +867,9 @@ Transcript:
         if call_data:
             df_calls = pd.DataFrame(
                 call_data,
-                columns=["Transcript", "Call Outcome", "Date"]
+                columns=["Call", "Transcript", "Call Outcome", "Date"]
             )
-            st.dataframe(df_calls)
+            st.dataframe(df_calls, use_container_width=True)
         else:
             st.info("No calls yet")
 
@@ -904,12 +883,10 @@ Transcript:
                         if not st.session_state.gemini_api_key:
                             st.warning("Enter Gemini API key in sidebar")
                         else:
-                            
-
                             gen_model = genai.GenerativeModel("gemini-2.5-flash")
 
                             all_calls_text = "\n\n".join(
-                                [f"Transcript: {c[0]} | Outcome: {c[1]}" for c in call_data]
+                                [f"{c[0]}: {c[1]} | Outcome: {c[2]}" for c in call_data]
                             )
 
                             prompt = f"""
@@ -922,7 +899,6 @@ Analyze these calls:
 Calls:
 {all_calls_text}
 """
-
                             response = gen_model.generate_content(prompt)
 
                             st.subheader("Overall Summary")
