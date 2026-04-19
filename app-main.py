@@ -281,6 +281,9 @@ with col2:
 # ===== PAGE CONTROL =====
 if "page" not in st.session_state:
     st.session_state.page = "login"
+
+if "back_click" not in st.session_state:
+    st.session_state.back_click = 0
 if "input_mode" not in st.session_state:
     st.session_state.input_mode = ""
 # ===== LOGIN PAGE =====
@@ -394,22 +397,29 @@ if st.session_state.page == "dashboard":
     # =========================================================
     # ================= COUNSELLOR PANEL =======================
     # =========================================================
-    if role == "counsellor":
+    if role == "counsellor" and st.session_state.page == "dashboard":
 
         st.title("Counsellor Panel")
 
         if st.button("Bulk Analysis", key="c_bulk"):
+    
+            st.session_state.back_click = 0
+            st.session_state.input_mode = ""
             st.session_state.page = "bulk"
 
         if st.button("Individual Analysis", key="c_individual"):
+            st.session_state.back_click = 0
+            st.session_state.input_mode = ""
             st.session_state.page = "individual"
-
+        
     # =========================================================
     # ================= MANAGER PANEL =========================
     # =========================================================
-    elif role == "manager":
-
+    elif role == "manager" and st.session_state.page == "dashboard":
+        if "back_click" not in st.session_state:
+           st.session_state.back_click = 0
         st.title("Manager Panel")
+
 
         if "active_section" not in st.session_state:
             st.session_state.active_section = ""
@@ -433,7 +443,10 @@ if st.session_state.page == "dashboard":
                 st.session_state.active_section = "rank"
 
         st.markdown("---")
-
+        if st.button("⬅ Back", key="manager_back"):
+               st.session_state.page = "login"
+               st.rerun()
+            
         # -------- ADD COUNSELLOR --------
         if st.session_state.active_section == "add":
 
@@ -667,7 +680,24 @@ if st.session_state.page == "dashboard":
 if st.session_state.page == "individual":
 
     st.title("Individual Student Analysis")
+    if st.button("⬅ Back", key="ind_back"):
+        if st.session_state.back_click == 0:
+    # 1st click → refresh
+            st.session_state.back_click = 1
+            st.rerun()
 
+        elif st.session_state.back_click == 1:
+            # 2nd click → dashboard
+            st.session_state.back_click = 2
+            st.session_state.page = "dashboard"
+            st.rerun()
+
+        else:
+            # 3rd click → login
+            st.session_state.back_click = 0
+            st.session_state.page = "login"
+            st.rerun()
+        
     # ---------- FETCH STUDENTS ----------
     cursor.execute("SELECT id, name FROM students")
     students = cursor.fetchall()
@@ -736,12 +766,54 @@ if st.session_state.page == "individual":
         )
 
         # ----- FILE UPLOAD -----
-        uploaded_file = st.file_uploader(
-            f"Upload Recording for {call_option}"
+        call_status = st.selectbox(
+            "Select Call Status",
+            ["Upload Audio", "Not Responding", "Busy", "Switched Off", "Other"]
         )
 
+        # 🔽 SHOW UPLOADER ONLY IF AUDIO
+        uploaded_file = None
+        if call_status == "Upload Audio":
+            uploaded_file = st.file_uploader(
+                f"Upload Recording for {call_option}"
+            )
         # ----- UPLOAD BUTTON -----
-        if st.button(f"Upload {call_option}"):
+        # 🔽 NON-AUDIO CASE
+        if call_status != "Upload Audio":
+
+            if call_status == "Other":
+                other_text = st.text_input("Enter custom status")
+            
+            if st.button("Save Call Status"):
+                 # 🔽 1. ADD CHECK HERE (FIRST)
+                cursor.execute(
+                    "SELECT * FROM calls WHERE student_id = ? AND call_type = ?",
+                    (student_id, call_option)
+                )
+                existing_call = cursor.fetchone()
+
+                if existing_call:
+                    st.error(f"{call_option} already exists!")
+
+                else:
+                    final_status = other_text if call_status == "Other" else call_status
+                
+                    cursor.execute(
+                        "INSERT INTO calls (student_id, call_type, transcript, sentiment, date, audio_hash) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            student_id,
+                            call_option,
+                            "No conversation",
+                            final_status,
+                            datetime.now().strftime("%Y-%m-%d"),
+                            "no_audio"
+                        )
+                    )
+                    conn.commit()
+
+                    st.success("Call status saved")
+                    st.rerun()
+        if call_status== "Upload Audio" and st.button(f"Upload {call_option}"):
 
             if uploaded_file is not None:
 
@@ -908,9 +980,27 @@ Calls:
                         st.error(f"Gemini error: {e}")
 # -------- CARD IMAGES (ADD HERE) --------
 if st.session_state.page == "bulk":
-    if st.button("Back"):
-        st.session_state.page = "dashboard"
-        st.rerun()
+    if st.button("⬅ Back", key="bulk_back"):
+
+        if st.session_state.back_click == 0:
+            # 1st click → refresh
+            st.session_state.back_click = 1
+            st.session_state.input_mode = ""
+            st.rerun()
+
+        elif st.session_state.back_click == 1:
+            # 2nd click → go to dashboard
+            st.session_state.back_click = 2
+            st.session_state.input_mode = ""
+            st.session_state.page = "dashboard"
+            st.rerun()
+
+        else:
+            # 3rd click → login
+            st.session_state.back_click = 0
+            st.session_state.input_mode = ""
+            st.session_state.page = "login"
+            st.rerun()
 
     audio_img = load_image_base64("audio_image.jpeg")
     text_img = load_image_base64("text_image.jpeg")
@@ -955,7 +1045,7 @@ csv_file = None
 crm_txt = None
 user_text = ""
 if st.session_state.page == "bulk":
-    if st.session_state.input_mode == "Audio Feedback":
+    if st.session_state.page == "bulk" and st.session_state.input_mode == "Audio Feedback":
         st.subheader("Upload Call Recordings")
         audio_files = st.file_uploader(
             "Upload call recordings (any audio file)", accept_multiple_files=True
@@ -1145,7 +1235,7 @@ def batch_sentiment_analysis(texts, batch_size=16):
 
 # CRM Text Log Sentiment
 # -----------------------------
-if st.session_state.input_mode == "CRM Text Log" and crm_txt is not None:
+if st.session_state.page == "bulk" and st.session_state.input_mode == "CRM Text Log" and crm_txt is not None:
     text_data = crm_txt.read().decode("utf-8")
 
     st.subheader("CRM Log Preview")
@@ -1176,7 +1266,7 @@ if st.session_state.input_mode == "CRM Text Log" and crm_txt is not None:
 # -----------------------------
 # TEXT FEEDBACK SENTIMENT (WORKING)
 # -----------------------------
-if st.session_state.input_mode == "Text Feedback":
+if st.session_state.page == "bulk" and st.session_state.input_mode == "Text Feedback":
 
     if user_text.strip():
         st.subheader("Sentiment Result")
@@ -1293,7 +1383,7 @@ merged = None
 # -----------------------------
 # Load DataFrame + Column Mapping
 # -----------------------------
-if st.session_state.input_mode == "Full CSV Analytics" and csv_file is not None:
+if st.session_state.input_mode== "bulk" and st.session_state.input_mode == "Full CSV Analytics" and csv_file is not None:
 
     try:
         df = pd.read_csv(csv_file)
