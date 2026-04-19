@@ -281,7 +281,11 @@ with col2:
 # ===== PAGE CONTROL =====
 if "page" not in st.session_state:
     st.session_state.page = "login"
+if "show_form" not in st.session_state:
+    st.session_state.show_form = False
 
+if "student_saved" not in st.session_state:
+    st.session_state.student_saved = False
 if "back_click" not in st.session_state:
     st.session_state.back_click = 0
 if "input_mode" not in st.session_state:
@@ -631,7 +635,12 @@ if st.session_state.page == "dashboard":
                         SELECT 
                             m.username AS manager,
                             c.username AS counsellor,
-                            COUNT(calls.id) AS total_calls
+                            COUNT(calls.id) AS total_calls,
+
+                            SUM(CASE 
+                                WHEN calls.sentiment = 'Interested' THEN 1 
+                                ELSE 0 
+                            END) AS successful_calls
                         FROM users c
                         LEFT JOIN users m ON c.manager_id = m.id
                         LEFT JOIN students ON students.counsellor_id = c.id
@@ -644,7 +653,9 @@ if st.session_state.page == "dashboard":
                     data = cursor.fetchall()
 
                     if data:
-                        df = pd.DataFrame(data, columns=["Manager", "Counsellor", "Calls"])
+                        df = pd.DataFrame(data, columns=["Manager", "Counsellor", "Total Calls","Successful Calls"])
+                        df["Success Rate (%)"] = ((df["Successful Calls"] / df["Total Calls"]) * 100).fillna(0).round(2)
+                        df = df.sort_values(by="Success Rate (%)", ascending=False)
 
                         st.subheader("Manager → Counsellor Performance")
 
@@ -655,7 +666,7 @@ if st.session_state.page == "dashboard":
                         fig = px.bar(
                             df,
                             x="Counsellor",
-                            y="Calls",
+                            y="Success Rate (%)",
                             color="Manager",
                             title="Counsellor Performance Under Each Manager"
                         )
@@ -680,48 +691,65 @@ if st.session_state.page == "dashboard":
 if st.session_state.page == "individual":
 
     st.title("Individual Student Analysis")
+
     if st.button("⬅ Back", key="ind_back"):
         if st.session_state.back_click == 0:
-    # 1st click → refresh
             st.session_state.back_click = 1
             st.rerun()
-
         elif st.session_state.back_click == 1:
-            # 2nd click → dashboard
             st.session_state.back_click = 2
             st.session_state.page = "dashboard"
             st.rerun()
-
         else:
-            # 3rd click → login
             st.session_state.back_click = 0
             st.session_state.page = "login"
             st.rerun()
-        
+
     # ---------- FETCH STUDENTS ----------
     cursor.execute("SELECT id, name FROM students")
     students = cursor.fetchall()
 
     student_names = [s[1] for s in students]
-    options = ["-- New Student --"] + student_names
+    options = ["-- Select Student --"] + student_names
 
     selected_student = st.selectbox(
-        "Select Existing Student",
+        "Select Student",
         options,
         key="student_selectbox"
     )
 
+    if selected_student != "-- Select Student --":
+        st.session_state.student_saved = False
+
+    if st.session_state.student_saved:
+        st.success("Student saved successfully!")
+        st.info("Now select the saved students from the dropdown above.")
+
     # ========= ADD NEW STUDENT =========
-    if selected_student == "-- New Student --":
+
+    if "show_form" not in st.session_state:
+        st.session_state.show_form = False
+
+    if "student_saved" not in st.session_state:
+        st.session_state.student_saved = False
+
+
+    if st.button("➕ Add New Student"):
+        st.session_state.show_form = True
+        st.session_state.student_saved = False
+        st.rerun()
+
+
+# ---------- FORM ----------
+    if st.session_state.show_form:
 
         st.subheader("Add New Student")
 
         name = st.text_input("Student Name")
         mobile = st.text_input("Mobile Number")
         location = st.text_input("Location")
-        
+
         if st.button("Save Student"):
-            
 
             if name.strip() == "":
                 st.error("Name required")
@@ -731,23 +759,31 @@ if st.session_state.page == "individual":
                     (name, mobile, location, st.session_state.user_id)
                 )
                 conn.commit()
-                st.success("Student Saved!")
+
+                st.session_state.show_form = False
+                st.session_state.student_saved = True
                 st.rerun()
 
+
+    # ---------- SUCCESS MESSAGE ----------
+    if st.session_state.student_saved:
+        st.success("Student saved successfully!")
+        st.info("Now select the student from the dropdown above.")
+
     # ========= EXISTING STUDENT =========
-    else:
+    if selected_student != "-- Select Student --":
 
         st.subheader(f"Student: {selected_student}")
 
         # ----- GET STUDENT ID -----
-        student_id = None
-        for s in students:
-            if s[1] == selected_student:
-                student_id = s[0]
-
-        if student_id is None:
-            st.error("Student ID not found")
+        student_dict = {s[1]: s[0] for s in students}
+        if selected_student == "-- Select Student --":
+            pass
+        if selected_student not in student_dict:
+            st.warning("Please select a valid student")
             st.stop()
+
+        student_id = student_dict[selected_student]
 
         st.write("Student ID:", student_id)
 
@@ -771,21 +807,20 @@ if st.session_state.page == "individual":
             ["Upload Audio", "Not Responding", "Busy", "Switched Off", "Other"]
         )
 
-        # 🔽 SHOW UPLOADER ONLY IF AUDIO
         uploaded_file = None
         if call_status == "Upload Audio":
             uploaded_file = st.file_uploader(
                 f"Upload Recording for {call_option}"
             )
-        # ----- UPLOAD BUTTON -----
-        # 🔽 NON-AUDIO CASE
+
+        # ----- NON-AUDIO CASE -----
         if call_status != "Upload Audio":
 
             if call_status == "Other":
                 other_text = st.text_input("Enter custom status")
-            
+
             if st.button("Save Call Status"):
-                 # 🔽 1. ADD CHECK HERE (FIRST)
+
                 cursor.execute(
                     "SELECT * FROM calls WHERE student_id = ? AND call_type = ?",
                     (student_id, call_option)
@@ -797,7 +832,7 @@ if st.session_state.page == "individual":
 
                 else:
                     final_status = other_text if call_status == "Other" else call_status
-                
+
                     cursor.execute(
                         "INSERT INTO calls (student_id, call_type, transcript, sentiment, date, audio_hash) VALUES (?, ?, ?, ?, ?, ?)",
                         (
@@ -813,7 +848,9 @@ if st.session_state.page == "individual":
 
                     st.success("Call status saved")
                     st.rerun()
-        if call_status== "Upload Audio" and st.button(f"Upload {call_option}"):
+
+        # ----- AUDIO CASE -----
+        if call_status == "Upload Audio" and st.button(f"Upload {call_option}"):
 
             if uploaded_file is not None:
 
@@ -875,36 +912,40 @@ Return only corrected text.
                             st.warning(f"Gemini enhancement failed: {e}")
 
                     # ----- CALL OUTCOME -----
+                    # ----- CALL OUTCOME -----
                     with st.spinner("Analyzing call outcome..."):
                         try:
-                            if not st.session_state.gemini_api_key:
-                                st.warning("Enter Gemini API key in sidebar")
-                                call_status = "No API Key"
-                            else:
+                            if st.session_state.gemini_api_key:
+
                                 gen_model = genai.GenerativeModel("gemini-2.5-flash")
 
                                 prompt = f"""
-You are a strict classifier.
+                    
 
-Classify into ONLY one:
+                    Classify into ONLY one:
 
-- Interested
-- Not Interested
-- Not Reachable
-- Switched Off
-- Call Later
+                    - Interested
+                    - Not Interested
+                    - Not Reachable
+                    - Switched Off
+                    - Call Later
 
-No explanation.
+                    If none match exactly, choose the closest one.
+                    Return only one label
 
-Transcript:
-{transcript}
-"""
+                    Transcript:
+                    {transcript}
+                    """
                                 response = gen_model.generate_content(prompt)
 
                                 if response and response.text:
                                     call_status = response.text.strip()
                                 else:
                                     call_status = "Call Later"
+
+                            else:
+                                # 🔥 FIX — no API key case
+                                call_status = "Call Later"
 
                         except Exception as e:
                             st.error(f"Gemini error: {e}")
