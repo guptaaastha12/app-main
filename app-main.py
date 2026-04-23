@@ -599,9 +599,64 @@ if st.session_state.page == "dashboard":
 
         # -------- COUNSELLOR --------
         elif st.session_state.owner_section == "counsellor":
-
+            st.title("Counsellor Management")
             if "owner_tab" not in st.session_state:
                 st.session_state.owner_tab = "list"
+           
+
+            # ---------- INIT STATE ----------
+            if "owner_tab" not in st.session_state:
+                st.session_state.owner_tab = "list"
+
+            if "show_add_counsellor" not in st.session_state:
+                st.session_state.show_add_counsellor = False
+
+
+            # ---------- TOP BAR (ADD BUTTON RIGHT) ----------
+            col1, col2 = st.columns([8, 2])
+
+            with col2:
+                if st.button("➕ Add Counsellor"):
+                    st.session_state.show_add_counsellor = True
+
+
+            # ---------- ADD COUNSELLOR FORM ----------
+            if st.session_state.show_add_counsellor:
+
+                st.subheader("Add Counsellor")
+
+                new_user = st.text_input("Username", key="c_user")
+                new_pass = st.text_input("Password", type="password", key="c_pass")
+
+                # fetch managers
+                cursor.execute("SELECT id, username FROM users WHERE role='manager'")
+                managers = cursor.fetchall()
+
+                manager_dict = {m[1]: m[0] for m in managers}
+                manager_names = list(manager_dict.keys())
+
+                selected_manager = st.selectbox("Assign Manager", manager_names)
+
+                if st.button("Save Counsellor"):
+
+                    if new_user.strip() == "" or new_pass.strip() == "":
+                        st.warning("All fields required")
+
+                    else:
+                        cursor.execute("SELECT * FROM users WHERE username=?", (new_user,))
+                        if cursor.fetchone():
+                            st.warning("Username already exists")
+                        else:
+                            cursor.execute(
+                                "INSERT INTO users (username, password, role, manager_id) VALUES (?, ?, ?, ?)",
+                                (new_user, new_pass, "counsellor", manager_dict[selected_manager])
+                            )
+                            conn.commit()
+
+                            st.success("Counsellor added successfully")
+
+                            st.session_state.show_add_counsellor = False
+                            st.rerun()
 
             tab1, tab2 = st.tabs(["List", "Performance"])
 
@@ -674,7 +729,62 @@ if st.session_state.page == "dashboard":
                         st.plotly_chart(fig, use_container_width=True)
         # -------- STUDENT ANALYTICS --------
         elif st.session_state.owner_section == "student":
+            st.title("Student Analytics")
 
+                # ---------- INIT STATE ----------
+            if "show_admin_form" not in st.session_state:
+                st.session_state.show_admin_form = False
+
+            #if "student_added" not in st.session_state:
+
+
+            # ---------- TOP BAR (RIGHT BUTTON) ----------
+            col1, col2 = st.columns([8, 2])
+
+            with col2:
+                if st.button("➕ Add Student"):
+                    st.session_state.show_admin_form = True
+
+
+                # ---------- ADD STUDENT FORM ----------
+            if st.session_state.show_admin_form:
+
+                st.subheader("Add Student")
+
+                name = st.text_input("Student Name", key="admin_name")
+                mobile = st.text_input("Mobile Number", key="admin_mobile")
+                location = st.text_input("Location", key="admin_location")
+
+                cursor.execute("SELECT id, username FROM users WHERE role='counsellor'")
+                counsellors = cursor.fetchall()
+
+                counsellor_dict = {c[1]: c[0] for c in counsellors}
+                counsellor_names = list(counsellor_dict.keys())
+
+                selected_counsellor = st.selectbox("Assign Counsellor", counsellor_names)
+
+                if st.button("Save Student"):
+
+                    if name.strip() == "":
+                        st.warning("Name required")
+
+                    else:
+                        cursor.execute(
+                            "INSERT INTO students (name, mobile, location, counsellor_id) VALUES (?, ?, ?, ?)",
+                            (name, mobile, location, counsellor_dict[selected_counsellor])
+                        )
+                        conn.commit()
+                        st.session_state.student_added = True
+                        st.session_state.show_admin_form = False
+                        st.rerun()
+            if st.session_state.get("student_added", False):
+                 st.success("Student added successfully")
+                 st.session_state.student_added = False
+                
+
+
+    # ---------- STUDENT TABLE ----------
+            st.subheader("Student Records")
             cursor.execute("""
                 SELECT students.name, users.username, calls.sentiment
                 FROM calls
@@ -685,7 +795,9 @@ if st.session_state.page == "dashboard":
 
             if data:
                 df = pd.DataFrame(data, columns=["Student", "Counsellor", "Sentiment"])
-                st.dataframe(df)
+                st.dataframe(df , use_container_width=True)
+            else:
+                st.info("No student data available")
 
 # ===== INDIVIDUAL ANALYSIS UI =====
 if st.session_state.page == "individual":
