@@ -255,7 +255,7 @@ st.markdown(
     f"""
         <div style="text-align:center; margin-bottom:25px;">
             <img src="data:image/jpeg;base64,{logo_base64}" width="90" style="margin-bottom:12px;">
-            <h1 style="margin:0;">GREATER NOIDA COLLEGE SENTIMENT ANALYSIS</h1>
+            <h1 style="margin:0;">GREATER NOIDA COLLEGE SENTIMENT ANALYSIS SYSTEM</h1>
             <p style="margin-top:6px; color:gray; font-size:15px;">
                 Audio + CRM Logs → Transcript → Sentiment → Insights → Recommendations
             </p>
